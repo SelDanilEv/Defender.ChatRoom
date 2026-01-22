@@ -6,7 +6,7 @@ on:
       push_to_registry:
         description: 'Push images to registry'
         required: false
-        default: 'false'
+        default: 'true'
         type: choice
         options:
           - 'true'

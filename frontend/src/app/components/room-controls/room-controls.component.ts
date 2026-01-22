@@ -42,8 +42,6 @@ import { TranslateModule } from '@ngx-translate/core';
           max="100" 
           [value]="micLevel()"
           (input)="onMicLevelChange($event)"
-          (touchstart)="onTouchStart($event)"
-          (touchmove)="onTouchMove($event)"
         />
         <div class="volume-value">
           <span>0%</span>
