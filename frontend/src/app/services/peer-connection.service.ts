@@ -75,9 +75,20 @@ export class PeerConnectionService {
         return;
       }
       
-      localStream.getTracks().forEach(track => {
-        if (track.kind === 'audio') {
+      const audioTracks = localStream.getAudioTracks().filter(track => 
+        track.readyState === 'live' && track.enabled
+      );
+      
+      if (audioTracks.length === 0) {
+        this.pendingCreates.delete(remoteId);
+        return;
+      }
+
+      audioTracks.forEach(track => {
+        try {
           pc.addTrack(track, localStream);
+        } catch (error) {
+          console.error(`Error adding track to peer connection for ${remoteId}:`, error);
         }
       });
 
@@ -88,14 +99,41 @@ export class PeerConnectionService {
     };
 
     pc.ontrack = (event) => {
-      const currentParticipant = this.participants().find(p => p.id === remoteId);
-      if (!currentParticipant || currentParticipant.audioElement) {
+      if (!event.streams || event.streams.length === 0) {
         return;
       }
 
-      const stream = event.streams[0];
-      if (!stream || stream.getAudioTracks().length === 0) {
+      const currentParticipant = this.participants().find(p => p.id === remoteId);
+      if (!currentParticipant) {
         return;
+      }
+
+      if (currentParticipant.audioElement) {
+        const existingStream = currentParticipant.audioElement.srcObject as MediaStream;
+        if (existingStream && existingStream.id === event.streams[0].id) {
+          return;
+        }
+      }
+
+      const stream = event.streams[0];
+      const audioTracks = stream.getAudioTracks();
+      
+      if (!stream || audioTracks.length === 0) {
+        return;
+      }
+
+      const activeTrack = audioTracks.find(track => track.readyState === 'live');
+      if (!activeTrack) {
+        return;
+      }
+
+      if (currentParticipant.audioElement) {
+        try {
+          currentParticipant.audioElement.pause();
+          currentParticipant.audioElement.srcObject = null;
+          currentParticipant.audioElement.remove();
+        } catch (error) {
+        }
       }
 
       const audioElement = document.createElement('audio');
@@ -114,7 +152,7 @@ export class PeerConnectionService {
         });
       }
 
-      event.track.onended = () => {
+      activeTrack.onended = () => {
         if (currentParticipant.audioElement) {
           try {
             currentParticipant.audioElement.pause();
@@ -168,15 +206,21 @@ export class PeerConnectionService {
     participant.peerConnection = pc;
     this.participants.update(participants => [...participants, participant]);
 
-      if (shouldOffer) {
-        const offer = await pc.createOffer();
+    if (shouldOffer) {
+      try {
+        const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: false });
         await pc.setLocalDescription(offer);
         sendMessage({
           type: 'offer',
           toId: remoteId,
           sdp: JSON.stringify(offer)
         });
+      } catch (error) {
+        console.error(`Error creating offer for ${remoteId}:`, error);
+        this.pendingCreates.delete(remoteId);
+        this.removeParticipant(remoteId);
       }
+    }
     } finally {
       this.pendingCreates.delete(remoteId);
     }
@@ -188,19 +232,33 @@ export class PeerConnectionService {
     sendMessage: (message: any) => void
   ): Promise<void> {
     const participant = this.participants().find(p => p.id === fromId);
-    if (!participant || !participant.peerConnection) return;
+    if (!participant || !participant.peerConnection) {
+      return;
+    }
 
     const pc = participant.peerConnection;
     
-    if (pc.signalingState === 'closed') {
+    if (pc.signalingState === 'closed' || pc.connectionState === 'closed') {
+      return;
+    }
+
+    if (pc.signalingState !== 'stable' && pc.signalingState !== 'have-local-offer') {
+      setTimeout(() => {
+        this.handleOffer(fromId, sdp, sendMessage);
+      }, 100);
       return;
     }
 
     try {
       const offer = JSON.parse(sdp) as RTCSessionDescriptionInit;
+      
+      if (!offer.type || offer.type !== 'offer') {
+        return;
+      }
+
       await pc.setRemoteDescription(offer);
 
-      const answer = await pc.createAnswer();
+      const answer = await pc.createAnswer({ offerToReceiveAudio: true, offerToReceiveVideo: false });
       await pc.setLocalDescription(answer);
 
       sendMessage({
@@ -215,23 +273,70 @@ export class PeerConnectionService {
 
   async handleAnswer(fromId: string, sdp: string): Promise<void> {
     const participant = this.participants().find(p => p.id === fromId);
-    if (!participant || !participant.peerConnection) return;
+    if (!participant || !participant.peerConnection) {
+      return;
+    }
 
-    const answer = JSON.parse(sdp) as RTCSessionDescriptionInit;
-    await participant.peerConnection.setRemoteDescription(answer);
+    const pc = participant.peerConnection;
+
+    if (pc.signalingState === 'closed' || pc.connectionState === 'closed') {
+      return;
+    }
+
+    if (pc.signalingState !== 'have-local-offer') {
+      setTimeout(() => {
+        this.handleAnswer(fromId, sdp);
+      }, 100);
+      return;
+    }
+
+    try {
+      const answer = JSON.parse(sdp) as RTCSessionDescriptionInit;
+      
+      if (!answer.type || answer.type !== 'answer') {
+        return;
+      }
+
+      await pc.setRemoteDescription(answer);
+    } catch (error) {
+      console.error(`Error handling answer from ${fromId}:`, error);
+    }
   }
 
   async handleIce(fromId: string, candidate: string): Promise<void> {
     const participant = this.participants().find(p => p.id === fromId);
-    if (!participant || !participant.peerConnection) return;
+    if (!participant || !participant.peerConnection) {
+      return;
+    }
+
+    const pc = participant.peerConnection;
+
+    if (pc.signalingState === 'closed' || pc.connectionState === 'closed') {
+      return;
+    }
 
     try {
       const iceCandidate = JSON.parse(candidate) as RTCIceCandidateInit;
-      await participant.peerConnection.addIceCandidate(iceCandidate);
-    } catch (error) {
-      setTimeout(() => {
-        this.handleIce(fromId, candidate);
-      }, 1000);
+      
+      if (!iceCandidate.candidate && !iceCandidate.candidate === null) {
+        return;
+      }
+
+      await pc.addIceCandidate(iceCandidate);
+    } catch (error: any) {
+      if (error.name === 'OperationError' || error.name === 'InvalidStateError') {
+        return;
+      }
+      
+      const retryCount = (this.createFailures.get(`ice-${fromId}`) ?? 0) + 1;
+      if (retryCount < 3) {
+        this.createFailures.set(`ice-${fromId}`, retryCount);
+        setTimeout(() => {
+          this.handleIce(fromId, candidate);
+        }, 500);
+      } else {
+        this.createFailures.delete(`ice-${fromId}`);
+      }
     }
   }
 

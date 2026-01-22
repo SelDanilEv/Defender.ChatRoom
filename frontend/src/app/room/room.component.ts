@@ -293,12 +293,20 @@ export class RoomComponent implements OnInit, OnDestroy {
               message.muted || false,
               false
             );
+            
+            await new Promise(resolve => setTimeout(resolve, 100));
           }
 
-          const created = this.peerConnectionService
+          const participant = this.peerConnectionService
             .getParticipants()
-            .some((p: Participant) => p.id === message.fromId);
-          if (!created) {
+            .find((p: Participant) => p.id === message.fromId);
+          
+          if (!participant || !participant.peerConnection) {
+            break;
+          }
+
+          const pc = participant.peerConnection;
+          if (pc.signalingState === 'closed' || pc.connectionState === 'closed') {
             break;
           }
 
@@ -311,11 +319,33 @@ export class RoomComponent implements OnInit, OnDestroy {
         break;
 
       case 'answer':
-        this.peerConnectionService.handleAnswer(message.fromId, message.sdp);
+        if (message.fromId && message.fromId !== this.roomStateService.getSelfId()) {
+          const participant = this.peerConnectionService
+            .getParticipants()
+            .find((p: Participant) => p.id === message.fromId);
+          
+          if (participant && participant.peerConnection) {
+            const pc = participant.peerConnection;
+            if (pc.signalingState !== 'closed' && pc.connectionState !== 'closed') {
+              await this.peerConnectionService.handleAnswer(message.fromId, message.sdp);
+            }
+          }
+        }
         break;
 
       case 'ice':
-        this.peerConnectionService.handleIce(message.fromId, message.candidate);
+        if (message.fromId && message.fromId !== this.roomStateService.getSelfId()) {
+          const participant = this.peerConnectionService
+            .getParticipants()
+            .find((p: Participant) => p.id === message.fromId);
+          
+          if (participant && participant.peerConnection) {
+            const pc = participant.peerConnection;
+            if (pc.signalingState !== 'closed' && pc.connectionState !== 'closed') {
+              await this.peerConnectionService.handleIce(message.fromId, message.candidate);
+            }
+          }
+        }
         break;
 
       case 'kicked':
@@ -349,22 +379,33 @@ export class RoomComponent implements OnInit, OnDestroy {
       return;
     }
 
-    await this.peerConnectionService.createPeerConnection(
-      remoteId,
-      remoteName,
-      muted,
-      shouldOffer,
-      localStream,
-      this.audioService.volume$(),
-      (msg: { type: string; [key: string]: unknown }) => this.webSocketService.sendMessage(msg)
-    );
+    const audioTrack = this.audioService.getLocalAudioTrack();
+    if (!audioTrack || audioTrack.readyState !== 'live') {
+      this.pendingPeers.set(remoteId, { id: remoteId, name: remoteName, muted, shouldOffer });
+      return;
+    }
 
-    const created = this.peerConnectionService
-      .getParticipants()
-      .some((participant: Participant) => participant.id === remoteId);
-    if (created) {
-      this.pendingPeers.delete(remoteId);
-    } else if (!this.pendingPeers.has(remoteId)) {
+    try {
+      await this.peerConnectionService.createPeerConnection(
+        remoteId,
+        remoteName,
+        muted,
+        shouldOffer,
+        localStream,
+        this.audioService.volume$(),
+        (msg: { type: string; [key: string]: unknown }) => this.webSocketService.sendMessage(msg)
+      );
+
+      const created = this.peerConnectionService
+        .getParticipants()
+        .some((participant: Participant) => participant.id === remoteId);
+      if (created) {
+        this.pendingPeers.delete(remoteId);
+      } else if (!this.pendingPeers.has(remoteId)) {
+        this.pendingPeers.set(remoteId, { id: remoteId, name: remoteName, muted, shouldOffer });
+      }
+    } catch (error) {
+      console.error(`Error creating peer connection for ${remoteId}:`, error);
       this.pendingPeers.set(remoteId, { id: remoteId, name: remoteName, muted, shouldOffer });
     }
   }
