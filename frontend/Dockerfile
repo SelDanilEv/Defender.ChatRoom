@@ -9,4 +9,5 @@ FROM nginx:alpine
 RUN apk add --no-cache wget
 COPY --from=build /app/dist/frontend/browser /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
+RUN cp /usr/share/nginx/html/assets/logo.png /usr/share/nginx/html/favicon.ico
 EXPOSE 80
