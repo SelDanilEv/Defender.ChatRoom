@@ -100,7 +100,7 @@ export class PeerConnectionService {
 
       const audioElement = document.createElement('audio');
       audioElement.autoplay = true;
-      audioElement.playsInline = true;
+      audioElement.setAttribute('playsinline', 'true');
       audioElement.srcObject = stream;
       const volumeLevel = Math.min(volume / 100, 1.0);
       audioElement.volume = volumeLevel;
