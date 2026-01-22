@@ -103,6 +103,11 @@ h2 {
   border: 2px solid #4a9eff;
 }
 
+.participant-card-other {
+  background: linear-gradient(135deg, #2f2f2f 0%, #262626 100%);
+  border: 2px solid #555;
+}
+
 .participant-avatar {
   width: 64px;
   height: 64px;
@@ -121,6 +126,11 @@ h2 {
 .participant-card-self .participant-avatar {
   background: #4a9eff;
   box-shadow: 0 2px 12px rgba(74, 158, 255, 0.5);
+}
+
+.participant-card-other .participant-avatar {
+  background: #7a7a7a;
+  box-shadow: 0 2px 12px rgba(122, 122, 122, 0.35);
 }
 
 .participant-initial {
@@ -150,6 +160,11 @@ h2 {
   font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.5px;
+  min-height: 18px;
+}
+
+.participant-badge-hidden {
+  visibility: hidden;
 }
 
 .participant-status {
@@ -181,40 +196,6 @@ h2 {
   font-size: 14px;
 }
 
-.hearing-accessibility-enhanced {
-  border: 3px solid #51cf66 !important;
-  box-shadow: 0 0 20px rgba(81, 207, 102, 0.5) !important;
-  transform: scale(1.05);
-  animation: hearingAccessibilityPulse 2s ease-in-out infinite;
-}
-
-.hearing-accessibility-avatar {
-  width: 80px !important;
-  height: 80px !important;
-  font-size: 36px !important;
-  box-shadow: 0 0 15px rgba(81, 207, 102, 0.7) !important;
-  animation: hearingAccessibilityAvatarPulse 1.5s ease-in-out infinite;
-}
-
-@keyframes hearingAccessibilityPulse {
-  0%, 100% {
-    box-shadow: 0 0 20px rgba(81, 207, 102, 0.5);
-  }
-  50% {
-    box-shadow: 0 0 30px rgba(81, 207, 102, 0.8);
-  }
-}
-
-@keyframes hearingAccessibilityAvatarPulse {
-  0%, 100% {
-    transform: scale(1);
-    box-shadow: 0 0 15px rgba(81, 207, 102, 0.7);
-  }
-  50% {
-    transform: scale(1.1);
-    box-shadow: 0 0 25px rgba(81, 207, 102, 1);
-  }
-}
 
 .controls {
   display: grid;
@@ -245,10 +226,6 @@ h2 {
 
 .control-button-leave {
   background: #d32f2f;
-}
-
-.control-button-accessibility {
-  background: #9c27b0;
 }
 
 .button-icon {
@@ -288,6 +265,10 @@ h2 {
   -webkit-appearance: none;
   appearance: none;
   cursor: pointer;
+  touch-action: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .volume-control input[type="range"]::-webkit-slider-thumb {
@@ -483,13 +464,4 @@ h2 {
     padding: 2px 6px;
   }
 
-  .hearing-accessibility-avatar {
-    width: 56px !important;
-    height: 56px !important;
-    font-size: 26px !important;
-  }
-
-  .hearing-accessibility-enhanced {
-    transform: scale(1.02);
-  }
 }

@@ -199,8 +199,10 @@ public class SignalingService
     private void HandleMute(string connectionId, JsonElement data)
     {
         var muted = data.GetProperty("muted").GetBoolean();
-        _roomService.UpdateMuteState(connectionId, muted);
-        BroadcastMuteState(connectionId, muted);
+        if (_roomService.UpdateMuteState(connectionId, muted))
+        {
+            BroadcastMuteState(connectionId, muted);
+        }
     }
 
     private async Task HandleOfferAsync(string connectionId, JsonElement data)

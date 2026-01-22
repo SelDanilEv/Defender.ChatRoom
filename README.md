@@ -103,31 +103,6 @@ For production/home server deployment:
 2. Configure the proxy to:
    - Serve the frontend static files
    - Proxy `/ws` WebSocket connections to the backend
-3. Example nginx configuration:
-
-```nginx
-server {
-    listen 443 ssl;
-    server_name your-domain.com;
-    
-    ssl_certificate /path/to/cert.pem;
-    ssl_certificate_key /path/to/key.pem;
-    
-    location / {
-        proxy_pass http://localhost:80;
-        proxy_set_header Host $host;
-    }
-    
-    location /ws {
-        proxy_pass http://backend:8080/ws;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-        proxy_read_timeout 86400;
-    }
-}
-```
 
 ## Architecture
 

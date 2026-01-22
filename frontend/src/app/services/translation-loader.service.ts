@@ -40,9 +40,6 @@ const translations: { [lang: string]: { [key: string]: string } } = {
     'room.micInUse': 'Microphone is already in use by another application.',
     'room.micUserInteraction': 'Microphone access requires a user interaction. Please click the button below.',
     'room.failedToReconnect': 'Failed to reconnect after multiple attempts. Please refresh the page.',
-    'room.hearingAccessibility': 'Hearing Accessibility Mode',
-    'room.enableHearingAccessibility': 'Enable Hearing Accessibility',
-    'room.disableHearingAccessibility': 'Disable Hearing Accessibility',
     'common.error': 'Error',
     'common.language': 'Language'
   },
@@ -83,9 +80,6 @@ const translations: { [lang: string]: { [key: string]: string } } = {
     'room.micInUse': 'Микрофон уже используется другим приложением.',
     'room.micUserInteraction': 'Для доступа к микрофону требуется взаимодействие с пользователем. Нажмите кнопку ниже.',
     'room.failedToReconnect': 'Не удалось переподключиться после нескольких попыток. Обновите страницу.',
-    'room.hearingAccessibility': 'Режим для слабослышащих',
-    'room.enableHearingAccessibility': 'Включить режим для слабослышащих',
-    'room.disableHearingAccessibility': 'Выключить режим для слабослышащих',
     'common.error': 'Ошибка',
     'common.language': 'Язык'
   },
@@ -126,9 +120,6 @@ const translations: { [lang: string]: { [key: string]: string } } = {
     'room.micInUse': 'Мікрафон ужо выкарыстоўваецца іншым прыкладаннем.',
     'room.micUserInteraction': 'Для доступу да мікрафона патрабуецца ўзаемадзеянне з карыстальнікам. Націсніце кнопку ніжэй.',
     'room.failedToReconnect': 'Не ўдалося перападключыцца пасля некалькіх спроб. Абнавіце старонку.',
-    'room.hearingAccessibility': 'Рэжым для слабачуючых',
-    'room.enableHearingAccessibility': 'Уключыць рэжым для слабачуючых',
-    'room.disableHearingAccessibility': 'Выключыць рэжым для слабачуючых',
     'common.error': 'Памылка',
     'common.language': 'Мова'
   }

@@ -58,15 +58,21 @@ public class RoomService
         }
     }
 
-    public void UpdateMuteState(string connectionId, bool muted)
+    public bool UpdateMuteState(string connectionId, bool muted)
     {
         lock (_lockObj)
         {
             if (_participants.TryGetValue(connectionId, out var participant))
             {
+                if (participant.Muted == muted)
+                {
+                    return false;
+                }
                 participant.Muted = muted;
+                return true;
             }
         }
+        return false;
     }
 
     public bool HasParticipant(string connectionId)
