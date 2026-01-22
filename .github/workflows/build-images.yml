@@ -54,7 +54,9 @@ jobs:
           context: ./backend
           file: ./backend/Dockerfile
           push: ${{ github.event.inputs.push_to_registry == 'true' }}
-          tags: ${{ env.REPOSITORY_OWNER }}/${{ env.IMAGE_NAME_BACKEND }}:${{ steps.tag.outputs.tag }}
+          tags: |
+            ${{ env.REPOSITORY_OWNER }}/${{ env.IMAGE_NAME_BACKEND }}:${{ steps.tag.outputs.tag }}
+            ${{ env.REPOSITORY_OWNER }}/${{ env.IMAGE_NAME_BACKEND }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -64,17 +66,19 @@ jobs:
           context: ./frontend
           file: ./frontend/Dockerfile
           push: ${{ github.event.inputs.push_to_registry == 'true' }}
-          tags: ${{ env.REPOSITORY_OWNER }}/${{ env.IMAGE_NAME_FRONTEND }}:${{ steps.tag.outputs.tag }}
+          tags: |
+            ${{ env.REPOSITORY_OWNER }}/${{ env.IMAGE_NAME_FRONTEND }}:${{ steps.tag.outputs.tag }}
+            ${{ env.REPOSITORY_OWNER }}/${{ env.IMAGE_NAME_FRONTEND }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       - name: Output image names
         run: |
           echo "Tag: ${{ steps.tag.outputs.tag }}"
-          echo "Backend: ${{ env.REPOSITORY_OWNER }}/${{ env.IMAGE_NAME_BACKEND }}:${{ steps.tag.outputs.tag }}"
-          echo "Frontend: ${{ env.REPOSITORY_OWNER }}/${{ env.IMAGE_NAME_FRONTEND }}:${{ steps.tag.outputs.tag }}"
+          echo "Backend: ${{ env.REPOSITORY_OWNER }}/${{ env.IMAGE_NAME_BACKEND }}:${{ steps.tag.outputs.tag }} (also tagged as latest)"
+          echo "Frontend: ${{ env.REPOSITORY_OWNER }}/${{ env.IMAGE_NAME_FRONTEND }}:${{ steps.tag.outputs.tag }} (also tagged as latest)"
           if [ "${{ github.event.inputs.push_to_registry }}" == "true" ]; then
-            echo "✅ Images pushed to Docker Hub with tag: ${{ steps.tag.outputs.tag }}"
+            echo "✅ Images pushed to Docker Hub with tags: ${{ steps.tag.outputs.tag }} and latest"
           else
             echo "✅ Images built (not pushed)"
           fi

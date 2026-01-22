@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   backend:
-    image: ${REPOSITORY_OWNER:-defendersd}/defender-chatroom-backend:${IMAGE_TAG:-latest}
+    image: defendersd/defender-chatroom-backend:latest
     restart: unless-stopped
     environment:
       - ASPNETCORE_URLS=http://0.0.0.0:8080
@@ -18,7 +18,7 @@ services:
       - app-network
 
   frontend:
-    image: ${REPOSITORY_OWNER:-defendersd}/defender-chatroom-frontend:${IMAGE_TAG:-latest}
+    image: defendersd/defender-chatroom-frontend:latest
     restart: unless-stopped
     ports:
       - "8083:80"
