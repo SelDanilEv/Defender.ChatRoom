@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  backend:
+    image: ${REPOSITORY_OWNER:-defendersd}/defender-chatroom-backend:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    environment:
+      - ASPNETCORE_URLS=http://0.0.0.0:8080
+      - ASPNETCORE_ENVIRONMENT=Production
+      - STUN_SERVERS=stun:stun.l.google.com:19302
+      # Uncomment and set your passphrase:
+      # - Room__Passphrase=your-secret-passphrase
+      # - Room__InactivityMinutes=15
+      # - Room__HeartbeatSeconds=30
+    expose:
+      - "8080"
+    networks:
+      - app-network
+
+  frontend:
+    image: ${REPOSITORY_OWNER:-defendersd}/defender-chatroom-frontend:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    ports:
+      - "8083:80"
+    depends_on:
+      - backend
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge

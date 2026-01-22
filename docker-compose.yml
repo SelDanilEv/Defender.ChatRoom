@@ -1,0 +1,37 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      - ASPNETCORE_URLS=http://0.0.0.0:8080
+      # Configuration via environment variables (override appsettings.json)
+      # Use double underscore for nested config: Room__Passphrase
+      # Legacy format also supported: ROOM_PASSPHRASE, INACTIVITY_MINUTES, HEARTBEAT_SECONDS
+      # - Room__Passphrase=your-secret-passphrase
+      # - Room__InactivityMinutes=5
+      # - Room__HeartbeatSeconds=30
+      - STUN_SERVERS=stun:stun.l.google.com:19302
+    expose:
+      - "8080"
+    networks:
+      - app-network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8083:80"
+    depends_on:
+      - backend
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
