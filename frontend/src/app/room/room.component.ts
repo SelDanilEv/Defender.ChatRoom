@@ -253,7 +253,9 @@ export class RoomComponent implements OnInit, OnDestroy {
               .getParticipants()
               .some((participant: Participant) => participant.id === p.id);
             if (!exists && !this.processingPeers.has(p.id)) {
-              this.createPeerConnection(p.id, p.name, p.muted || false, true);
+              const selfId = this.roomStateService.getSelfId();
+              const shouldOffer = selfId < p.id;
+              this.createPeerConnection(p.id, p.name, p.muted || false, shouldOffer);
             }
           }
         }
@@ -275,7 +277,9 @@ export class RoomComponent implements OnInit, OnDestroy {
             .getParticipants()
             .some((participant: Participant) => participant.id === message.id);
           if (!exists && !this.processingPeers.has(message.id)) {
-            this.createPeerConnection(message.id, message.name, message.muted || false, false);
+            const selfId = this.roomStateService.getSelfId();
+            const shouldOffer = selfId < message.id;
+            this.createPeerConnection(message.id, message.name, message.muted || false, shouldOffer);
           }
         }
         break;
@@ -302,7 +306,7 @@ export class RoomComponent implements OnInit, OnDestroy {
               false
             );
             
-            await new Promise(resolve => setTimeout(resolve, 100));
+            await new Promise(resolve => setTimeout(resolve, 200));
           }
 
           const participant = this.peerConnectionService
@@ -310,6 +314,22 @@ export class RoomComponent implements OnInit, OnDestroy {
             .find((p: Participant) => p.id === message.fromId);
           
           if (!participant || !participant.peerConnection) {
+            setTimeout(() => {
+              const retryParticipant = this.peerConnectionService
+                .getParticipants()
+                .find((p: Participant) => p.id === message.fromId);
+              if (retryParticipant && retryParticipant.peerConnection) {
+                const pc = retryParticipant.peerConnection;
+                const connState = pc.connectionState as string;
+                if (connState !== 'failed' && connState !== 'closed') {
+                  this.peerConnectionService.handleOffer(
+                    message.fromId,
+                    message.sdp,
+                    (msg: { type: string; [key: string]: unknown }) => this.webSocketService.sendMessage(msg)
+                  ).catch(() => {});
+                }
+              }
+            }, 300);
             break;
           }
 
@@ -334,7 +354,8 @@ export class RoomComponent implements OnInit, OnDestroy {
           
           if (participant && participant.peerConnection) {
             const pc = participant.peerConnection;
-            if (pc.signalingState !== 'closed' && pc.connectionState !== 'closed') {
+            const connState = pc.connectionState as string;
+            if (connState !== 'failed' && connState !== 'closed') {
               await this.peerConnectionService.handleAnswer(message.fromId, message.sdp);
             }
           }
@@ -349,7 +370,8 @@ export class RoomComponent implements OnInit, OnDestroy {
           
           if (participant && participant.peerConnection) {
             const pc = participant.peerConnection;
-            if (pc.signalingState !== 'closed' && pc.connectionState !== 'closed') {
+            const connState = pc.connectionState as string;
+            if (connState !== 'failed' && connState !== 'closed') {
               await this.peerConnectionService.handleIce(message.fromId, message.candidate);
             }
           }

@@ -22,6 +22,7 @@ export class PeerConnectionService {
   private readonly pendingAnswers = new Map<string, string>();
   private readonly processingOffers = new Set<string>();
   private readonly processingAnswers = new Set<string>();
+  private readonly pendingOfferCreates = new Map<string, RTCPeerConnection>();
 
   readonly participants$ = this.participants.asReadonly();
 
@@ -228,7 +229,29 @@ export class PeerConnectionService {
     this.participants.update(participants => [...participants, participant]);
 
     if (shouldOffer) {
+      this.pendingOfferCreates.set(remoteId, pc);
       try {
+        const connState = pc.connectionState as string;
+        if (connState === 'failed' || connState === 'closed') {
+          this.pendingCreates.delete(remoteId);
+          this.pendingOfferCreates.delete(remoteId);
+          return;
+        }
+        
+        await new Promise(resolve => setTimeout(resolve, 100));
+        
+        const connStateAfter = pc.connectionState as string;
+        if (connStateAfter === 'failed' || connStateAfter === 'closed') {
+          this.pendingCreates.delete(remoteId);
+          this.pendingOfferCreates.delete(remoteId);
+          return;
+        }
+
+        if (this.pendingOffers.has(remoteId)) {
+          this.pendingOfferCreates.delete(remoteId);
+          return;
+        }
+
         const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: false });
         await pc.setLocalDescription(offer);
         sendMessage({
@@ -236,10 +259,17 @@ export class PeerConnectionService {
           toId: remoteId,
           sdp: JSON.stringify(offer)
         });
+        this.pendingOfferCreates.delete(remoteId);
       } catch (error) {
         console.error(`Error creating offer for ${remoteId}:`, error);
         this.pendingCreates.delete(remoteId);
-        this.removeParticipant(remoteId);
+        this.pendingOfferCreates.delete(remoteId);
+        setTimeout(() => {
+          const stillExists = this.participants().find(p => p.id === remoteId);
+          if (stillExists && stillExists.peerConnection === pc) {
+            this.removeParticipant(remoteId);
+          }
+        }, 1000);
       }
     }
     } finally {
@@ -257,15 +287,40 @@ export class PeerConnectionService {
       return;
     }
 
+    const pendingOfferCreate = this.pendingOfferCreates.get(fromId);
+    if (pendingOfferCreate) {
+      this.pendingOfferCreates.delete(fromId);
+      try {
+        if (pendingOfferCreate.signalingState !== 'closed' && pendingOfferCreate.connectionState !== 'closed') {
+          pendingOfferCreate.close();
+        }
+      } catch (error) {
+      }
+    }
+
     const participant = this.participants().find(p => p.id === fromId);
     if (!participant || !participant.peerConnection) {
       this.pendingOffers.set(fromId, sdp);
+      let retries = 0;
+      const maxRetries = 10;
+      const checkInterval = setInterval(() => {
+        retries++;
+        const retryParticipant = this.participants().find(p => p.id === fromId);
+        if (retryParticipant && retryParticipant.peerConnection) {
+          clearInterval(checkInterval);
+          this.handleOffer(fromId, sdp, sendMessage);
+        } else if (retries >= maxRetries) {
+          clearInterval(checkInterval);
+          this.pendingOffers.delete(fromId);
+        }
+      }, 100);
       return;
     }
 
     const pc = participant.peerConnection;
     
-    if (pc.signalingState === 'closed' || pc.connectionState === 'closed') {
+    const connState = pc.connectionState as string;
+    if (connState === 'failed' || connState === 'closed') {
       return;
     }
 
@@ -277,7 +332,7 @@ export class PeerConnectionService {
           this.pendingOffers.delete(fromId);
           this.handleOffer(fromId, pendingSdp, sendMessage);
         }
-      }, 100);
+      }, 150);
       return;
     }
 
@@ -302,12 +357,21 @@ export class PeerConnectionService {
       });
     } catch (error) {
       console.error(`Error handling offer from ${fromId}:`, error);
+      this.pendingOffers.set(fromId, sdp);
+      setTimeout(() => {
+        const pendingSdp = this.pendingOffers.get(fromId);
+        if (pendingSdp && participant.peerConnection && participant.peerConnection.signalingState !== 'closed') {
+          this.pendingOffers.delete(fromId);
+          this.processingOffers.delete(fromId);
+          this.handleOffer(fromId, pendingSdp, sendMessage);
+        }
+      }, 500);
     } finally {
       this.processingOffers.delete(fromId);
       const nextOffer = this.pendingOffers.get(fromId);
       if (nextOffer) {
         this.pendingOffers.delete(fromId);
-        setTimeout(() => this.handleOffer(fromId, nextOffer, sendMessage), 50);
+        setTimeout(() => this.handleOffer(fromId, nextOffer, sendMessage), 100);
       }
     }
   }
@@ -472,6 +536,7 @@ export class PeerConnectionService {
     this.pendingAnswers.clear();
     this.processingOffers.clear();
     this.processingAnswers.clear();
+    this.pendingOfferCreates.clear();
     this.statsIntervals.forEach(intervalId => clearInterval(intervalId));
     this.statsIntervals.clear();
   }
