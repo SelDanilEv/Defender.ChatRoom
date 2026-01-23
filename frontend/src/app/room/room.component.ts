@@ -11,6 +11,7 @@ import { WebSocketService, WebSocketMessage } from '../services/websocket.servic
 import { AudioService } from '../services/audio.service';
 import { PeerConnectionService, Participant } from '../services/peer-connection.service';
 import { RoomStateService } from '../services/room-state.service';
+import { HealthMonitorService } from '../services/health-monitor.service';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { filter } from 'rxjs';
 
@@ -98,6 +99,7 @@ export class RoomComponent implements OnInit, OnDestroy {
   protected audioService = inject(AudioService);
   private peerConnectionService = inject(PeerConnectionService);
   private roomStateService = inject(RoomStateService);
+  private healthMonitor = inject(HealthMonitorService);
 
   private clientId: string = '';
   private joinHandled = false;
@@ -148,6 +150,7 @@ export class RoomComponent implements OnInit, OnDestroy {
       if (localStream && this.webSocketService.isConnected()) {
         if (this.joinSent) {
           this.processPendingPeers();
+          this.healthMonitor.startMonitoring();
           return;
         }
         this.isProcessingJoin = true;
@@ -161,6 +164,7 @@ export class RoomComponent implements OnInit, OnDestroy {
         }
         this.webSocketService.startHeartbeat();
         this.webSocketService.setupActivityTracking();
+        this.healthMonitor.startMonitoring();
       }
     }
   });
@@ -501,6 +505,7 @@ export class RoomComponent implements OnInit, OnDestroy {
   }
 
   private cleanup() {
+    this.healthMonitor.stopMonitoring();
     this.isProcessingJoin = false;
     this.joinHandled = false;
     this.joinSent = false;
