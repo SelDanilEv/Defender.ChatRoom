@@ -18,6 +18,10 @@ export class PeerConnectionService {
   private readonly blockedUntil = new Map<string, number>();
   private readonly createFailures = new Map<string, number>();
   private readonly statsIntervals = new Map<string, number>();
+  private readonly pendingOffers = new Map<string, string>();
+  private readonly pendingAnswers = new Map<string, string>();
+  private readonly processingOffers = new Set<string>();
+  private readonly processingAnswers = new Set<string>();
 
   readonly participants$ = this.participants.asReadonly();
 
@@ -177,26 +181,43 @@ export class PeerConnectionService {
 
     pc.onconnectionstatechange = () => {
       const state = pc.connectionState;
+      const participant = this.participants().find(p => p.id === remoteId);
+      
+      if (!participant || participant.peerConnection !== pc) {
+        return;
+      }
 
       if (state === 'connected') {
         this.lastRetryAt.delete(remoteId);
+        this.createFailures.delete(remoteId);
         this.startStatsLogging(remoteId, pc);
       } else if (state === 'failed') {
         this.retryPeerConnection(remoteId, remoteName, muted, shouldOffer, localStream, volume, sendMessage, retryCount + 1);
       } else if (state === 'disconnected') {
         setTimeout(() => {
-          if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
-            this.retryPeerConnection(remoteId, remoteName, muted, shouldOffer, localStream, volume, sendMessage, retryCount + 1);
+          const currentParticipant = this.participants().find(p => p.id === remoteId);
+          if (currentParticipant && currentParticipant.peerConnection === pc) {
+            const currentState = pc.connectionState;
+            if (currentState === 'disconnected' || currentState === 'failed') {
+              this.retryPeerConnection(remoteId, remoteName, muted, shouldOffer, localStream, volume, sendMessage, retryCount + 1);
+            }
           }
         }, 3000);
       } else if (state === 'closed') {
         this.stopStatsLogging(remoteId);
-        this.removeParticipant(remoteId);
+        if (participant && participant.peerConnection === pc) {
+          this.removeParticipant(remoteId);
+        }
       }
     };
 
     pc.oniceconnectionstatechange = () => {
       const iceState = pc.iceConnectionState;
+      const participant = this.participants().find(p => p.id === remoteId);
+      
+      if (!participant || participant.peerConnection !== pc) {
+        return;
+      }
 
       if (iceState === 'failed') {
         this.retryPeerConnection(remoteId, remoteName, muted, shouldOffer, localStream, volume, sendMessage, retryCount + 1);
@@ -231,8 +252,14 @@ export class PeerConnectionService {
     sdp: string,
     sendMessage: (message: any) => void
   ): Promise<void> {
+    if (this.processingOffers.has(fromId)) {
+      this.pendingOffers.set(fromId, sdp);
+      return;
+    }
+
     const participant = this.participants().find(p => p.id === fromId);
     if (!participant || !participant.peerConnection) {
+      this.pendingOffers.set(fromId, sdp);
       return;
     }
 
@@ -243,16 +270,23 @@ export class PeerConnectionService {
     }
 
     if (pc.signalingState !== 'stable' && pc.signalingState !== 'have-local-offer') {
+      this.pendingOffers.set(fromId, sdp);
       setTimeout(() => {
-        this.handleOffer(fromId, sdp, sendMessage);
+        const pendingSdp = this.pendingOffers.get(fromId);
+        if (pendingSdp) {
+          this.pendingOffers.delete(fromId);
+          this.handleOffer(fromId, pendingSdp, sendMessage);
+        }
       }, 100);
       return;
     }
 
+    this.processingOffers.add(fromId);
     try {
       const offer = JSON.parse(sdp) as RTCSessionDescriptionInit;
       
       if (!offer.type || offer.type !== 'offer') {
+        this.processingOffers.delete(fromId);
         return;
       }
 
@@ -268,12 +302,25 @@ export class PeerConnectionService {
       });
     } catch (error) {
       console.error(`Error handling offer from ${fromId}:`, error);
+    } finally {
+      this.processingOffers.delete(fromId);
+      const nextOffer = this.pendingOffers.get(fromId);
+      if (nextOffer) {
+        this.pendingOffers.delete(fromId);
+        setTimeout(() => this.handleOffer(fromId, nextOffer, sendMessage), 50);
+      }
     }
   }
 
   async handleAnswer(fromId: string, sdp: string): Promise<void> {
+    if (this.processingAnswers.has(fromId)) {
+      this.pendingAnswers.set(fromId, sdp);
+      return;
+    }
+
     const participant = this.participants().find(p => p.id === fromId);
     if (!participant || !participant.peerConnection) {
+      this.pendingAnswers.set(fromId, sdp);
       return;
     }
 
@@ -284,22 +331,36 @@ export class PeerConnectionService {
     }
 
     if (pc.signalingState !== 'have-local-offer') {
+      this.pendingAnswers.set(fromId, sdp);
       setTimeout(() => {
-        this.handleAnswer(fromId, sdp);
+        const pendingSdp = this.pendingAnswers.get(fromId);
+        if (pendingSdp) {
+          this.pendingAnswers.delete(fromId);
+          this.handleAnswer(fromId, pendingSdp);
+        }
       }, 100);
       return;
     }
 
+    this.processingAnswers.add(fromId);
     try {
       const answer = JSON.parse(sdp) as RTCSessionDescriptionInit;
       
       if (!answer.type || answer.type !== 'answer') {
+        this.processingAnswers.delete(fromId);
         return;
       }
 
       await pc.setRemoteDescription(answer);
     } catch (error) {
       console.error(`Error handling answer from ${fromId}:`, error);
+    } finally {
+      this.processingAnswers.delete(fromId);
+      const nextAnswer = this.pendingAnswers.get(fromId);
+      if (nextAnswer) {
+        this.pendingAnswers.delete(fromId);
+        setTimeout(() => this.handleAnswer(fromId, nextAnswer), 50);
+      }
     }
   }
 
@@ -318,11 +379,12 @@ export class PeerConnectionService {
     try {
       const iceCandidate = JSON.parse(candidate) as RTCIceCandidateInit;
       
-      if (!iceCandidate.candidate && !iceCandidate.candidate === null) {
+      if (!iceCandidate.candidate && iceCandidate.candidate !== null) {
         return;
       }
 
       await pc.addIceCandidate(iceCandidate);
+      this.createFailures.delete(`ice-${fromId}`);
     } catch (error: any) {
       if (error.name === 'OperationError' || error.name === 'InvalidStateError') {
         return;
@@ -406,6 +468,10 @@ export class PeerConnectionService {
     this.pendingCreates.clear();
     this.blockedUntil.clear();
     this.createFailures.clear();
+    this.pendingOffers.clear();
+    this.pendingAnswers.clear();
+    this.processingOffers.clear();
+    this.processingAnswers.clear();
     this.statsIntervals.forEach(intervalId => clearInterval(intervalId));
     this.statsIntervals.clear();
   }
@@ -473,12 +539,18 @@ export class PeerConnectionService {
       if (state === 'connected' || state === 'connecting') {
         return;
       }
-      existingParticipant.peerConnection.close();
+      try {
+        existingParticipant.peerConnection.close();
+      } catch (error) {
+      }
       this.removeParticipant(remoteId);
     }
 
     setTimeout(() => {
-      this.createPeerConnection(remoteId, remoteName, muted, shouldOffer, localStream, volume, sendMessage, retryCount);
+      const stillExists = this.participants().find(p => p.id === remoteId);
+      if (!stillExists) {
+        this.createPeerConnection(remoteId, remoteName, muted, shouldOffer, localStream, volume, sendMessage, retryCount);
+      }
     }, 2000 * (retryCount + 1));
   }
 }

@@ -102,7 +102,9 @@ export class RoomComponent implements OnInit, OnDestroy {
   private clientId: string = '';
   private joinHandled = false;
   private joinSent = false;
+  private isProcessingJoin = false;
   private pendingPeers = new Map<string, { id: string; name: string; muted: boolean; shouldOffer: boolean }>();
+  private processingPeers = new Set<string>();
   private userGestureHandler = () => {
     void this.audioService.resumeAudioContext();
     void this.peerConnectionService.resumeRemoteAudio();
@@ -135,26 +137,30 @@ export class RoomComponent implements OnInit, OnDestroy {
     if (!this.webSocketService.isConnected()) {
       this.joinHandled = false;
       this.joinSent = false;
+      this.isProcessingJoin = false;
     }
   });
 
   private microphoneEffect = effect(() => {
     const granted = this.audioService.microphoneGranted$();
-    if (granted) {
+    if (granted && !this.isProcessingJoin) {
       const localStream = this.audioService.getLocalStream();
       if (localStream && this.webSocketService.isConnected()) {
         if (this.joinSent) {
+          this.processPendingPeers();
           return;
         }
+        this.isProcessingJoin = true;
         const passphrase = this.roomStateService.getPassphrase();
         if (passphrase && this.roomStateService.getAwaitingChallenge()) {
-          this.sendJoinResponse().catch(() => {});
+          this.sendJoinResponse().catch(() => {
+            this.isProcessingJoin = false;
+          });
         } else {
           this.sendJoinMessage();
         }
         this.webSocketService.startHeartbeat();
         this.webSocketService.setupActivityTracking();
-        this.processPendingPeers();
       }
     }
   });
@@ -235,6 +241,7 @@ export class RoomComponent implements OnInit, OnDestroy {
         }
         this.joinHandled = true;
         this.joinSent = true;
+        this.isProcessingJoin = false;
         this.roomStateService.setSelfId(message.selfId);
         if (this.audioService.microphoneGranted$()) {
           this.webSocketService.startHeartbeat();
@@ -245,11 +252,12 @@ export class RoomComponent implements OnInit, OnDestroy {
             const exists = this.peerConnectionService
               .getParticipants()
               .some((participant: Participant) => participant.id === p.id);
-            if (!exists) {
+            if (!exists && !this.processingPeers.has(p.id)) {
               this.createPeerConnection(p.id, p.name, p.muted || false, true);
             }
           }
         }
+        this.processPendingPeers();
         break;
 
       case 'join-error':
@@ -266,7 +274,7 @@ export class RoomComponent implements OnInit, OnDestroy {
           const exists = this.peerConnectionService
             .getParticipants()
             .some((participant: Participant) => participant.id === message.id);
-          if (!exists) {
+          if (!exists && !this.processingPeers.has(message.id)) {
             this.createPeerConnection(message.id, message.name, message.muted || false, false);
           }
         }
@@ -286,7 +294,7 @@ export class RoomComponent implements OnInit, OnDestroy {
             .getParticipants()
             .some((p: Participant) => p.id === message.fromId);
 
-          if (!existing) {
+          if (!existing && !this.processingPeers.has(message.fromId)) {
             await this.createPeerConnection(
               message.fromId,
               message.name || 'Guest',
@@ -373,6 +381,11 @@ export class RoomComponent implements OnInit, OnDestroy {
     muted: boolean,
     shouldOffer: boolean
   ) {
+    if (this.processingPeers.has(remoteId)) {
+      this.pendingPeers.set(remoteId, { id: remoteId, name: remoteName, muted, shouldOffer });
+      return;
+    }
+
     const localStream = this.audioService.getLocalStream();
     if (!localStream) {
       this.pendingPeers.set(remoteId, { id: remoteId, name: remoteName, muted, shouldOffer });
@@ -385,6 +398,7 @@ export class RoomComponent implements OnInit, OnDestroy {
       return;
     }
 
+    this.processingPeers.add(remoteId);
     try {
       await this.peerConnectionService.createPeerConnection(
         remoteId,
@@ -407,10 +421,15 @@ export class RoomComponent implements OnInit, OnDestroy {
     } catch (error) {
       console.error(`Error creating peer connection for ${remoteId}:`, error);
       this.pendingPeers.set(remoteId, { id: remoteId, name: remoteName, muted, shouldOffer });
+    } finally {
+      this.processingPeers.delete(remoteId);
     }
   }
 
   private sendJoinMessage() {
+    if (this.joinSent) {
+      return;
+    }
     this.joinSent = true;
     this.webSocketService.sendMessage({
       type: 'join',
@@ -423,19 +442,30 @@ export class RoomComponent implements OnInit, OnDestroy {
     const passphrase = this.roomStateService.getPassphrase();
     const pendingChallenge = this.roomStateService.getPendingChallenge();
     if (!passphrase || !pendingChallenge) {
+      this.isProcessingJoin = false;
       return;
     }
 
-    this.joinSent = true;
-    const passphraseHash = await this.roomStateService.sha256(passphrase);
-    const response = await this.roomStateService.sha256(passphraseHash + pendingChallenge);
+    if (this.joinSent) {
+      this.isProcessingJoin = false;
+      return;
+    }
 
-    this.webSocketService.sendMessage({
-      type: 'join-response',
-      name: this.displayName(),
-      muted: this.audioService.isMuted$(),
-      response: response
-    });
+    try {
+      this.joinSent = true;
+      const passphraseHash = await this.roomStateService.sha256(passphrase);
+      const response = await this.roomStateService.sha256(passphraseHash + pendingChallenge);
+
+      this.webSocketService.sendMessage({
+        type: 'join-response',
+        name: this.displayName(),
+        muted: this.audioService.isMuted$(),
+        response: response
+      });
+    } catch (error) {
+      this.isProcessingJoin = false;
+      this.joinSent = false;
+    }
   }
 
   private async sendLeaveMessageAndWait(): Promise<void> {
@@ -449,20 +479,26 @@ export class RoomComponent implements OnInit, OnDestroy {
   }
 
   private cleanup() {
+    this.isProcessingJoin = false;
+    this.joinHandled = false;
+    this.joinSent = false;
+    this.processingPeers.clear();
+    this.pendingPeers.clear();
     this.webSocketService.disconnect();
     this.peerConnectionService.cleanup();
     this.audioService.cleanup();
-    this.pendingPeers.clear();
   }
 
   private processPendingPeers(): void {
-    if (this.pendingPeers.size === 0) {
+    if (this.pendingPeers.size === 0 || !this.audioService.microphoneGranted$() || !this.webSocketService.isConnected()) {
       return;
     }
 
     const pending = Array.from(this.pendingPeers.values());
     for (const peer of pending) {
-      this.createPeerConnection(peer.id, peer.name, peer.muted, peer.shouldOffer);
+      if (!this.processingPeers.has(peer.id)) {
+        this.createPeerConnection(peer.id, peer.name, peer.muted, peer.shouldOffer);
+      }
     }
   }
 

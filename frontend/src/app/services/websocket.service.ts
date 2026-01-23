@@ -19,6 +19,8 @@ export class WebSocketService {
   private connectionCheckInterval?: number;
   private lastHeartbeatTime = 0;
   private messageQueue: WebSocketMessage[] = [];
+  private readonly maxQueueSize = 100;
+  private isConnecting = false;
   private activityEvents = ['mousemove', 'keydown', 'click', 'touchstart'];
   private activityHandler = () => this.sendHeartbeat();
 
@@ -38,10 +40,15 @@ export class WebSocketService {
   constructor() {}
 
   connect(clientId: string): void {
+    if (this.isConnecting) {
+      return;
+    }
+
     if (this.ws && this.ws.readyState !== WebSocket.CLOSED) {
       return;
     }
 
+    this.isConnecting = true;
     let wsUrl: string;
     const clientIdParam = encodeURIComponent(clientId);
     if (window.location.port === '4200') {
@@ -53,9 +60,18 @@ export class WebSocketService {
     }
 
     this.connectionStatus.set(this.reconnectAttempts() > 0 ? 'reconnecting' : 'connecting');
-    this.ws = new WebSocket(wsUrl);
+    
+    try {
+      this.ws = new WebSocket(wsUrl);
+    } catch (error) {
+      this.isConnecting = false;
+      this.connectionStatus.set('disconnected');
+      this.attemptReconnect(clientId);
+      return;
+    }
 
     this.ws.onopen = () => {
+      this.isConnecting = false;
       this.connectionStatus.set('connected');
       this.reconnectAttempts.set(0);
       this.lastHeartbeatTime = Date.now();
@@ -81,11 +97,14 @@ export class WebSocketService {
     };
 
     this.ws.onerror = () => {
+      this.isConnecting = false;
       this.connectionQuality.set('poor');
     };
 
     this.ws.onclose = (event) => {
+      this.isConnecting = false;
       if (event.code === 1000 || event.code === 1001) {
+        this.connectionStatus.set('disconnected');
         return;
       }
 
@@ -99,9 +118,14 @@ export class WebSocketService {
       try {
         this.ws.send(JSON.stringify(message));
       } catch (error) {
+        if (this.messageQueue.length < this.maxQueueSize) {
+          this.messageQueue.push(message);
+        }
       }
     } else {
-      this.messageQueue.push(message);
+      if (this.messageQueue.length < this.maxQueueSize) {
+        this.messageQueue.push(message);
+      }
     }
   }
 
@@ -137,6 +161,8 @@ export class WebSocketService {
   }
 
   disconnect(): void {
+    this.isConnecting = false;
+
     if (this.heartbeatInterval) {
       clearInterval(this.heartbeatInterval);
       this.heartbeatInterval = undefined;
@@ -178,6 +204,10 @@ export class WebSocketService {
   }
 
   private attemptReconnect(clientId: string): void {
+    if (this.reconnectTimeout) {
+      return;
+    }
+
     if (this.reconnectAttempts() >= this.maxReconnectAttempts) {
       this.connectionStatus.set('disconnected');
       return;
@@ -187,6 +217,7 @@ export class WebSocketService {
     const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts() - 1), 30000);
 
     this.reconnectTimeout = window.setTimeout(() => {
+      this.reconnectTimeout = undefined;
       this.connect(clientId);
     }, delay);
   }
@@ -197,12 +228,17 @@ export class WebSocketService {
     }
 
     this.connectionCheckInterval = window.setInterval(() => {
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+        return;
+      }
+
       const timeSinceLastHeartbeat = Date.now() - this.lastHeartbeatTime;
 
       if (timeSinceLastHeartbeat > 90000) {
         this.connectionQuality.set('unstable');
-        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-          this.ws.close();
+        try {
+          this.ws.close(1006, 'Connection timeout');
+        } catch (error) {
         }
       } else if (timeSinceLastHeartbeat > 60000) {
         this.connectionQuality.set('poor');

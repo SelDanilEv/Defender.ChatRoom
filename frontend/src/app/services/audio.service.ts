@@ -11,6 +11,7 @@ export class AudioService {
   private mediaStreamSource?: MediaStreamAudioSourceNode;
   private originalTrack?: MediaStreamTrack;
   private usingProcessedTrack = false;
+  private isInitializing = false;
 
   private readonly microphoneGranted = signal(false);
   private readonly requestingAccess = signal(false);
@@ -33,18 +34,27 @@ export class AudioService {
       return this.microphoneGranted();
     }
 
+    if (this.isInitializing) {
+      return false;
+    }
+
     this.requestingAccess.set(true);
     this.errorMessage.set('');
 
     try {
       this.localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      this.localAudioTrack = this.localStream.getAudioTracks()[0];
+      const tracks = this.localStream.getAudioTracks();
+      if (tracks.length === 0) {
+        throw new Error('No audio tracks available');
+      }
+      this.localAudioTrack = tracks[0];
       this.microphoneGranted.set(true);
       this.requestingAccess.set(false);
       await this.setupMicrophoneGain();
       return true;
     } catch (error: any) {
       this.requestingAccess.set(false);
+      this.cleanup();
 
       let errorKey = 'room.micUserInteraction';
       if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
@@ -69,7 +79,7 @@ export class AudioService {
   }
 
   toggleMute(): void {
-    if (this.localAudioTrack) {
+    if (this.localAudioTrack && this.localAudioTrack.readyState === 'live') {
       this.isMuted.update((muted: boolean) => !muted);
       this.localAudioTrack.enabled = !this.isMuted();
     }
@@ -106,11 +116,14 @@ export class AudioService {
   }
 
   cleanup(): void {
+    this.isInitializing = false;
+
     if (this.gainNode) {
       try {
         this.gainNode.disconnect();
       } catch (error) {
       }
+      this.gainNode = undefined;
     }
 
     if (this.mediaStreamSource) {
@@ -118,6 +131,7 @@ export class AudioService {
         this.mediaStreamSource.disconnect();
       } catch (error) {
       }
+      this.mediaStreamSource = undefined;
     }
 
     if (this.audioContext && this.audioContext.state !== 'closed') {
@@ -125,6 +139,7 @@ export class AudioService {
         this.audioContext.close();
       } catch (error) {
       }
+      this.audioContext = undefined;
     }
 
     if (this.localStream) {
@@ -145,6 +160,8 @@ export class AudioService {
 
     this.originalTrack = undefined;
     this.usingProcessedTrack = false;
+    this.microphoneGranted.set(false);
+    this.requestingAccess.set(false);
   }
 
   async resumeAudioContext(): Promise<void> {
@@ -152,13 +169,21 @@ export class AudioService {
       try {
         await this.audioContext.resume();
       } catch (error) {
+        console.error('Error resuming audio context:', error);
       }
     }
   }
 
   private async setupMicrophoneGain(): Promise<void> {
-    if (!this.localStream || !this.localAudioTrack) return;
+    if (!this.localStream || !this.localAudioTrack || this.isInitializing) {
+      return;
+    }
 
+    if (this.localAudioTrack.readyState !== 'live') {
+      return;
+    }
+
+    this.isInitializing = true;
     try {
       this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
       
@@ -166,10 +191,18 @@ export class AudioService {
         try {
           await this.audioContext.resume();
         } catch (error) {
+          this.isInitializing = false;
+          return;
         }
       }
 
       if (this.audioContext.state !== 'running') {
+        this.isInitializing = false;
+        return;
+      }
+
+      if (!this.localAudioTrack || this.localAudioTrack.readyState !== 'live') {
+        this.isInitializing = false;
         return;
       }
 
@@ -185,7 +218,8 @@ export class AudioService {
 
       const newTrack = destination.stream.getAudioTracks()[0];
       
-      if (newTrack.muted) {
+      if (!newTrack || newTrack.muted) {
+        this.isInitializing = false;
         return;
       }
 
@@ -195,13 +229,20 @@ export class AudioService {
       this.localAudioTrack = newTrack;
       this.usingProcessedTrack = true;
     } catch (error) {
+      console.error('Error setting up microphone gain:', error);
+    } finally {
+      this.isInitializing = false;
     }
   }
 
   private updateMicGain(): void {
-    if (this.gainNode) {
-      const gainValue = this.micLevel() / 100;
-      this.gainNode.gain.value = gainValue;
+    if (this.gainNode && this.audioContext && this.audioContext.state === 'running') {
+      try {
+        const gainValue = Math.max(0, Math.min(1, this.micLevel() / 100));
+        this.gainNode.gain.value = gainValue;
+      } catch (error) {
+        console.error('Error updating mic gain:', error);
+      }
     }
   }
 }
