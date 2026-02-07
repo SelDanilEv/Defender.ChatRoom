@@ -78,6 +78,10 @@ export class AudioService {
     return this.localAudioTrack;
   }
 
+  getAudioContextState(): string | null {
+    return this.audioContext?.state ?? null;
+  }
+
   toggleMute(): void {
     if (this.localAudioTrack && this.localAudioTrack.readyState === 'live') {
       this.isMuted.update((muted: boolean) => !muted);

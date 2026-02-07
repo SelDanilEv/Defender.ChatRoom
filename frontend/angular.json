@@ -68,6 +68,21 @@
             }
           },
           "defaultConfiguration": "development"
+        },
+        "test": {
+          "builder": "@angular-devkit/build-angular:karma",
+          "options": {
+            "polyfills": ["zone.js"],
+            "tsConfig": "tsconfig.spec.json",
+            "inlineStyleLanguage": "css",
+            "assets": ["src/favicon.ico", "src/assets"],
+            "styles": ["src/styles.css"],
+            "scripts": []
+          },
+          "configurations": {
+            "watch": { "watch": true },
+            "production": { "progress": false, "watch": false }
+          }
         }
       }
     }

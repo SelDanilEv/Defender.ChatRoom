@@ -7,7 +7,7 @@ A minimal self-hosted web application for audio-only group calls. Single shared 
 - Single shared audio-only call room
 - WebRTC peer-to-peer mesh networking
 - WebSocket signaling
-- Inactivity timeout (5 minutes default)
+- Inactivity timeout (15 minutes default)
 - Mute/unmute controls
 - Volume control
 - Minimal UI, dependency-light
@@ -50,7 +50,7 @@ npm start
 
 Frontend runs on http://localhost:4200
 
-Note: For local development, the frontend will connect to `ws://localhost:8083/ws` automatically.
+Note: When running the frontend on port 4200, it connects to the backend at `ws://localhost:8080/ws`. When using Docker, the app is served on 8083 and connects to `/ws` on the same host.
 
 ## Configuration
 
@@ -110,6 +110,8 @@ For production/home server deployment:
 - **Frontend**: Angular SPA with WebRTC mesh peer connections (each participant connects to all others)
 - **Signaling**: JSON messages over WebSocket for WebRTC negotiation
 
+For detailed architecture, flows, and diagrams (for onboarding or the next chat), see **[docs/DOCUMENTATION.md](docs/DOCUMENTATION.md)**.
+
 ## Limitations
 
 - Mesh networking limits scalability to ~10 participants
@@ -121,5 +123,5 @@ For production/home server deployment:
 
 - **Microphone not working**: Check browser permissions and allow microphone access
 - **Can't hear others**: Check volume slider and browser audio settings
-- **Connection issues**: Verify STUN/TURN configuration for NAT traversal
-- **Inactivity kicks**: Users are automatically disconnected after 5 minutes of no activity
+- **Connection issues**: Verify STUN/TURN configuration for NAT traversal. STUN is set in frontend `PeerConnectionService` (e.g. `stun:stun.l.google.com:19302`).
+- **Inactivity kicks**: Users are automatically disconnected after 15 minutes of no activity (configurable)

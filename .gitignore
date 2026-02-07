@@ -1,6 +1,8 @@
 # .NET
 backend/bin/
 backend/obj/
+backend/**/bin/
+backend/**/obj/
 backend/.vs/
 backend/*.user
 backend/*.suo
@@ -67,7 +69,6 @@ frontend/yarn.lock
 
 # Docker
 *.log
-.dockerignore
 docker-compose.override.yml
 .env
 .env.local

@@ -141,7 +141,11 @@ class Program
                             providedPassphrase = passProp.GetString();
                         }
                     }
-                    catch { }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[reset] Invalid JSON body: {ex.Message}");
+                        return Results.BadRequest(new { error = "Invalid JSON body" });
+                    }
                 }
             }
 

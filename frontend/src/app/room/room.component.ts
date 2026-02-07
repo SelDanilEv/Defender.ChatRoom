@@ -1,4 +1,4 @@
-import { Component, OnInit, OnDestroy, computed, effect, inject } from '@angular/core';
+import { Component, OnInit, OnDestroy, computed, effect, inject, signal } from '@angular/core';
 import { Router } from '@angular/router';
 import { CommonModule } from '@angular/common';
 import { TranslateModule, TranslateService } from '@ngx-translate/core';
@@ -35,7 +35,15 @@ import { filter } from 'rxjs';
         @if (errorMessage()) {
           <div class="error">{{ errorMessage() | translate }}</div>
         }
-        
+        @if (participantLeftToast()) {
+          <div class="info" style="margin-bottom: 16px;">{{ participantLeftToast() }}</div>
+        }
+        @if (healthMonitor.status().overall !== 'healthy' && audioService.microphoneGranted$()) {
+          <div class="info" style="margin-bottom: 16px;">
+            {{ 'room.healthIssues' | translate }}
+            <button type="button" (click)="healthMonitor.forceRecovery()">{{ 'room.retryConnection' | translate }}</button>
+          </div>
+        }
         <app-connection-status
           [connectionStatus]="webSocketService.status()"
           [connectionQuality]="webSocketService.quality()"
@@ -99,7 +107,6 @@ export class RoomComponent implements OnInit, OnDestroy {
   protected audioService = inject(AudioService);
   private peerConnectionService = inject(PeerConnectionService);
   private roomStateService = inject(RoomStateService);
-  private healthMonitor = inject(HealthMonitorService);
 
   private clientId: string = '';
   private joinHandled = false;
@@ -107,6 +114,10 @@ export class RoomComponent implements OnInit, OnDestroy {
   private isProcessingJoin = false;
   private pendingPeers = new Map<string, { id: string; name: string; muted: boolean; shouldOffer: boolean }>();
   private processingPeers = new Set<string>();
+  private participantLeftToastTimeout: ReturnType<typeof setTimeout> | null = null;
+
+  protected healthMonitor = inject(HealthMonitorService);
+  protected participantLeftToast = signal<string | null>(null);
   private userGestureHandler = () => {
     void this.audioService.resumeAudioContext();
     void this.peerConnectionService.resumeRemoteAudio();
@@ -188,6 +199,12 @@ export class RoomComponent implements OnInit, OnDestroy {
   }
 
   private startLocalTrackMonitoring(): void {
+    const track = this.audioService.getLocalAudioTrack();
+    if (!track) return;
+    track.onended = () => {
+      this.audioService.cleanup();
+      this.roomStateService.setErrorMessage('room.micTrackEnded');
+    };
   }
 
   ngOnDestroy() {
@@ -289,7 +306,17 @@ export class RoomComponent implements OnInit, OnDestroy {
         break;
 
       case 'participant-left':
+        const leftParticipant = this.peerConnectionService.getParticipants().find(p => p.id === message.id);
+        const leftName = leftParticipant?.name ?? 'Guest';
         this.peerConnectionService.removeParticipant(message.id);
+        const reasonKey = message.reason === 'reconnected' ? 'room.participantLeftReconnected' : message.reason === 'disconnect' ? 'room.participantLeftDisconnected' : 'room.participantLeft';
+        const toastMsg = this.translateService.instant(reasonKey, { name: leftName });
+        this.participantLeftToast.set(toastMsg);
+        if (this.participantLeftToastTimeout) clearTimeout(this.participantLeftToastTimeout);
+        this.participantLeftToastTimeout = setTimeout(() => {
+          this.participantLeftToast.set(null);
+          this.participantLeftToastTimeout = null;
+        }, 4000);
         break;
 
       case 'participant-mute':
@@ -505,6 +532,11 @@ export class RoomComponent implements OnInit, OnDestroy {
   }
 
   private cleanup() {
+    if (this.participantLeftToastTimeout) {
+      clearTimeout(this.participantLeftToastTimeout);
+      this.participantLeftToastTimeout = null;
+    }
+    this.participantLeftToast.set(null);
     this.healthMonitor.stopMonitoring();
     this.isProcessingJoin = false;
     this.joinHandled = false;

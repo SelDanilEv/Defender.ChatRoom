@@ -172,8 +172,11 @@ export class HealthMonitorService {
     if (!track || !this.audioService.microphoneGranted$()) {
       return 'healthy';
     }
-
-    return 'healthy';
+    const state = this.audioService.getAudioContextState();
+    if (state === 'suspended' || state === 'closed') {
+      return 'unhealthy';
+    }
+    return state === 'running' ? 'healthy' : 'recovering';
   }
 
   private async attemptRecovery(status: HealthStatus): Promise<void> {

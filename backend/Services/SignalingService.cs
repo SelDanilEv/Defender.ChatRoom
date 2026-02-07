@@ -39,18 +39,41 @@ public class SignalingService
 
     public async Task ProcessMessageAsync(string connectionId, WebSocket ws, string message)
     {
+        JsonElement root;
         try
         {
             var doc = JsonDocument.Parse(message);
-            var type = doc.RootElement.GetProperty("type").GetString();
+            root = doc.RootElement;
+        }
+        catch (JsonException ex)
+        {
+            Console.WriteLine($"Error parsing message: {ex.Message}");
+            await SendErrorAsync(ws, "Invalid JSON");
+            return;
+        }
 
+        if (!root.TryGetProperty("type", out var typeProp))
+        {
+            await SendErrorAsync(ws, "Missing type");
+            return;
+        }
+
+        var type = typeProp.GetString();
+        if (string.IsNullOrEmpty(type))
+        {
+            await SendErrorAsync(ws, "Invalid type");
+            return;
+        }
+
+        try
+        {
             switch (type)
             {
                 case "join":
-                    await HandleJoinAsync(connectionId, ws, doc.RootElement);
+                    await HandleJoinAsync(connectionId, ws, root);
                     break;
                 case "join-response":
-                    await HandleJoinResponseAsync(connectionId, ws, doc.RootElement);
+                    await HandleJoinResponseAsync(connectionId, ws, root);
                     break;
                 case "leave":
                     HandleLeave(connectionId);
@@ -59,22 +82,34 @@ public class SignalingService
                     _roomService.UpdateLastSeen(connectionId);
                     break;
                 case "mute":
-                    HandleMute(connectionId, doc.RootElement);
+                    await HandleMuteAsync(connectionId, ws, root);
                     break;
                 case "offer":
-                    await HandleOfferAsync(connectionId, doc.RootElement);
+                    await HandleOfferAsync(connectionId, root);
                     break;
                 case "answer":
-                    await HandleAnswerAsync(connectionId, doc.RootElement);
+                    await HandleAnswerAsync(connectionId, root);
                     break;
                 case "ice":
-                    await HandleIceAsync(connectionId, doc.RootElement);
+                    await HandleIceAsync(connectionId, root);
+                    break;
+                default:
+                    await SendErrorAsync(ws, "Unknown message type");
                     break;
             }
         }
         catch (Exception ex)
         {
             Console.WriteLine($"Error processing message: {ex.Message}");
+            await SendErrorAsync(ws, "Processing failed");
+        }
+    }
+
+    private async Task SendErrorAsync(WebSocket ws, string message)
+    {
+        if (ws.State == WebSocketState.Open)
+        {
+            await _messageService.SendMessageAsync(ws, new { type = "error", message = message });
         }
     }
 
@@ -155,7 +190,9 @@ public class SignalingService
 
     private async Task CompleteJoinAsync(string connectionId, WebSocket ws, JsonElement data)
     {
-        var name = data.GetProperty("name").GetString() ?? $"Guest-{Random.Shared.Next(1000, 9999)}";
+        var name = data.TryGetProperty("name", out var nameProp) ? nameProp.GetString() : null;
+        if (string.IsNullOrWhiteSpace(name))
+            name = $"Guest-{Random.Shared.Next(1000, 9999)}";
         var muted = data.TryGetProperty("muted", out var mutedProp) && mutedProp.GetBoolean();
         
         var existingParticipant = _roomService.GetParticipant(connectionId);
@@ -196,9 +233,14 @@ public class SignalingService
         }
     }
 
-    private void HandleMute(string connectionId, JsonElement data)
+    private async Task HandleMuteAsync(string connectionId, WebSocket ws, JsonElement data)
     {
-        var muted = data.GetProperty("muted").GetBoolean();
+        if (!data.TryGetProperty("muted", out var mutedProp))
+        {
+            await SendErrorAsync(ws, "Missing muted");
+            return;
+        }
+        var muted = mutedProp.GetBoolean();
         if (_roomService.UpdateMuteState(connectionId, muted))
         {
             BroadcastMuteState(connectionId, muted);
@@ -207,21 +249,33 @@ public class SignalingService
 
     private async Task HandleOfferAsync(string connectionId, JsonElement data)
     {
-        var toId = data.GetProperty("toId").GetString();
-        var sdp = data.GetProperty("sdp").GetString();
-
+        if (!data.TryGetProperty("toId", out var toIdProp) || !data.TryGetProperty("sdp", out var sdpProp))
+        {
+            var senderWs = _connectionService.GetConnection(connectionId);
+            if (senderWs != null) await SendErrorAsync(senderWs, "Missing toId or sdp");
+            return;
+        }
+        var toId = toIdProp.GetString();
+        var sdp = sdpProp.GetString();
         if (string.IsNullOrEmpty(toId) || string.IsNullOrEmpty(sdp))
         {
+            var senderWs = _connectionService.GetConnection(connectionId);
+            if (senderWs != null) await SendErrorAsync(senderWs, "Invalid toId or sdp");
             return;
         }
 
         var targetWs = _connectionService.GetConnection(toId);
         if (targetWs != null)
         {
+            var participant = _roomService.GetParticipant(connectionId);
+            var name = participant?.Name ?? "Guest";
+            var muted = participant?.Muted ?? false;
             await _messageService.SendMessageAsync(targetWs, new
             {
                 type = "offer",
                 fromId = connectionId,
+                name = name,
+                muted = muted,
                 sdp = sdp
             });
         }
