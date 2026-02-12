@@ -110,7 +110,7 @@ For production/home server deployment:
 - **Frontend**: Angular SPA with WebRTC mesh peer connections (each participant connects to all others)
 - **Signaling**: JSON messages over WebSocket for WebRTC negotiation
 
-For detailed architecture, flows, and diagrams (for onboarding or the next chat), see **[docs/DOCUMENTATION.md](docs/DOCUMENTATION.md)**.
+For detailed architecture, flows, and diagrams (for onboarding or the next chat), see **[docs/DOCUMENTATION.md](docs/DOCUMENTATION.md)**. For an exhaustive project guide (protocol, config, file reference, task locations), see **[docs/PROJECT_GUIDE.md](docs/PROJECT_GUIDE.md)**.
 
 ## Limitations
 

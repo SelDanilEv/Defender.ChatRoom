@@ -32,8 +32,10 @@ class Program
         builder.Services.AddSingleton<ChallengeService>();
         builder.Services.AddSingleton<CryptographyService>();
         builder.Services.AddSingleton<WebSocketMessageService>();
+        builder.Services.AddSingleton<BroadcastService>();
         builder.Services.AddScoped<SignalingService>();
         builder.Services.AddScoped<WebSocketHandlerService>();
+        builder.Services.AddScoped<RoomResetHandler>();
 
         builder.Services.AddCors(options =>
         {
@@ -114,82 +116,8 @@ class Program
 
         app.MapMethods("/reset", new[] { "GET", "POST" }, async (HttpContext context) =>
         {
-            var roomOptions = context.RequestServices.GetRequiredService<IOptions<RoomOptions>>().Value;
-            var connectionService = context.RequestServices.GetRequiredService<WebSocketConnectionService>();
-            var roomService = context.RequestServices.GetRequiredService<RoomService>();
-            var messageService = context.RequestServices.GetRequiredService<WebSocketMessageService>();
-            var cryptographyService = context.RequestServices.GetRequiredService<CryptographyService>();
-
-            if (string.IsNullOrEmpty(roomOptions.Passphrase))
-            {
-                return Results.BadRequest(new { error = "Reset endpoint requires a passphrase to be configured" });
-            }
-
-            string? providedPassphrase = null;
-            
-            if (context.Request.HasJsonContentType())
-            {
-                using var reader = new StreamReader(context.Request.Body);
-                var body = await reader.ReadToEndAsync();
-                if (!string.IsNullOrEmpty(body))
-                {
-                    try
-                    {
-                        var json = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(body);
-                        if (json.TryGetProperty("passphrase", out var passProp))
-                        {
-                            providedPassphrase = passProp.GetString();
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"[reset] Invalid JSON body: {ex.Message}");
-                        return Results.BadRequest(new { error = "Invalid JSON body" });
-                    }
-                }
-            }
-
-            if (string.IsNullOrEmpty(providedPassphrase))
-            {
-                providedPassphrase = context.Request.Query["passphrase"].ToString();
-            }
-
-            if (string.IsNullOrEmpty(providedPassphrase))
-            {
-                return Results.Unauthorized();
-            }
-
-            var expectedHash = cryptographyService.ComputeSha256Hash(roomOptions.Passphrase);
-            var providedHash = cryptographyService.ComputeSha256Hash(providedPassphrase);
-
-            if (providedHash != expectedHash)
-            {
-                return Results.Unauthorized();
-            }
-
-            var allConnections = connectionService.GetAllConnections();
-            var disconnectedCount = 0;
-
-            foreach (var kvp in allConnections)
-            {
-                try
-                {
-                    if (kvp.Value.State == WebSocketState.Open)
-                    {
-                        await messageService.SendMessageAsync(kvp.Value, new { type = "kicked", reason = "room_reset" });
-                        await kvp.Value.CloseAsync(WebSocketCloseStatus.NormalClosure, "Room reset", CancellationToken.None);
-                        disconnectedCount++;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"Error disconnecting {kvp.Key}: {ex.Message}");
-                }
-            }
-
-            roomService.ClearAllParticipants();
-
-            return Results.Ok(new { message = "Room reset successfully", disconnectedCount = disconnectedCount });
+            var handler = context.RequestServices.GetRequiredService<RoomResetHandler>();
+            return await handler.HandleAsync(context);
         });
 
         await app.RunAsync();

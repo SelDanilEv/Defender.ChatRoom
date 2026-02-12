@@ -2,6 +2,8 @@
 
 This document describes the project structure, architecture, and main flows so that the next chat (or developer) can understand the system quickly.
 
+**For a super-detailed guide** (file-by-file reference, config, protocol, task locations), see **[PROJECT_GUIDE.md](PROJECT_GUIDE.md)**.
+
 ---
 
 ## 1. Project Overview

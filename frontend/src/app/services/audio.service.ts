@@ -221,8 +221,7 @@ export class AudioService {
       this.updateMicGain();
 
       const newTrack = destination.stream.getAudioTracks()[0];
-      
-      if (!newTrack || newTrack.muted) {
+      if (!newTrack) {
         this.isInitializing = false;
         return;
       }
