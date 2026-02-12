@@ -1,0 +1,72 @@
+<app-language-selector></app-language-selector>
+<div class="container">
+  <div class="card">
+    <h1>{{ 'room.title' | translate }}</h1>
+
+    @if (errorMessage()) {
+      <div class="error">{{ errorMessage() | translate }}</div>
+    }
+    @if (participantLeftToast()) {
+      <div class="info" style="margin-bottom: 16px;">{{ participantLeftToast() }}</div>
+    }
+    @if (healthMonitor.status().overall !== 'healthy' && audio.microphoneGranted$()) {
+      <div class="info" style="margin-bottom: 16px;">
+        {{ 'room.healthIssues' | translate }}
+        <button type="button" (click)="healthMonitor.forceRecovery()">
+          {{ 'room.retryConnection' | translate }}
+        </button>
+      </div>
+    }
+    <app-connection-status
+      [connectionStatus]="ws.status()"
+      [connectionQuality]="ws.quality()"
+      [reconnectAttempts]="ws.reconnectAttemptsCount()"
+      [maxReconnectAttempts]="ws.getMaxReconnectAttempts()"
+    ></app-connection-status>
+
+    @if (!audio.microphoneGranted$()) {
+      <div class="info" style="margin-bottom: 24px;">
+        <p style="margin-bottom: 16px;">{{ 'room.micRequired' | translate }}</p>
+        <button (click)="requestMicrophoneAccess()" [disabled]="audio.requestingAccess$()">
+          {{ (audio.requestingAccess$() ? 'room.requestingMicAccess' : 'room.requestMicAccess') | translate }}
+        </button>
+      </div>
+    }
+
+    @if (audio.microphoneGranted$()) {
+      <h2>{{ 'room.participants' | translate }} ({{ participantCount() }})</h2>
+
+      <div class="participants-grid">
+        <app-participant
+          [name]="displayName()"
+          [muted]="audio.isMuted$()"
+          [isSelf]="true"
+        ></app-participant>
+
+        @for (p of participants(); track p.id) {
+          <app-participant
+            [name]="p.name"
+            [muted]="p.muted"
+            [isSelf]="false"
+          ></app-participant>
+        }
+
+        @if (participants().length === 0) {
+          <div class="participants-empty">
+            {{ 'room.noParticipants' | translate }}
+          </div>
+        }
+      </div>
+
+      <app-room-controls
+        [isMuted]="audio.isMuted$()"
+        [volume]="audio.volume$()"
+        [micLevel]="audio.micLevel$()"
+        (toggleMute)="onToggleMute()"
+        (volumeChange)="onVolumeChange($event)"
+        (micLevelChange)="onMicLevelChange($event)"
+        (leaveRoom)="leaveRoom()"
+      ></app-room-controls>
+    }
+  </div>
+</div>

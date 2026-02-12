@@ -1,19 +1,32 @@
-import { Component, OnInit, OnDestroy, computed, effect, inject, signal } from '@angular/core';
+import {
+  Component,
+  OnInit,
+  OnDestroy,
+  computed,
+  effect,
+  inject,
+  signal,
+} from '@angular/core';
 import { Router } from '@angular/router';
 import { CommonModule } from '@angular/common';
 import { TranslateModule, TranslateService } from '@ngx-translate/core';
+import { toSignal } from '@angular/core/rxjs-interop';
+import { filter } from 'rxjs';
+
 import { LanguageSelectorComponent } from '../components/language-selector/language-selector.component';
 import { ParticipantComponent } from '../components/participant/participant.component';
 import { ConnectionStatusComponent } from '../components/connection-status/connection-status.component';
 import { RoomControlsComponent } from '../components/room-controls/room-controls.component';
+
 import { ClientIdService } from '../services/client-id.service';
-import { WebSocketService, WebSocketMessage } from '../services/websocket.service';
+import { WebSocketService } from '../services/websocket.service';
 import { AudioService } from '../services/audio.service';
-import { PeerConnectionService, Participant } from '../services/peer-connection.service';
+import { PeerConnectionService } from '../services/peer-connection.service';
 import { RoomStateService } from '../services/room-state.service';
 import { HealthMonitorService } from '../services/health-monitor.service';
-import { toSignal } from '@angular/core/rxjs-interop';
-import { filter } from 'rxjs';
+import { SignalingHandlerService } from '../services/signaling-handler.service';
+import { PeerOrchestratorService } from '../services/peer-orchestrator.service';
+import type { SignalingMessage } from '../models/signaling';
 
 @Component({
   selector: 'app-room',
@@ -24,554 +37,244 @@ import { filter } from 'rxjs';
     LanguageSelectorComponent,
     ParticipantComponent,
     ConnectionStatusComponent,
-    RoomControlsComponent
+    RoomControlsComponent,
   ],
-  template: `
-    <app-language-selector></app-language-selector>
-    <div class="container">
-      <div class="card">
-        <h1>{{ 'room.title' | translate }}</h1>
-        
-        @if (errorMessage()) {
-          <div class="error">{{ errorMessage() | translate }}</div>
-        }
-        @if (participantLeftToast()) {
-          <div class="info" style="margin-bottom: 16px;">{{ participantLeftToast() }}</div>
-        }
-        @if (healthMonitor.status().overall !== 'healthy' && audioService.microphoneGranted$()) {
-          <div class="info" style="margin-bottom: 16px;">
-            {{ 'room.healthIssues' | translate }}
-            <button type="button" (click)="healthMonitor.forceRecovery()">{{ 'room.retryConnection' | translate }}</button>
-          </div>
-        }
-        <app-connection-status
-          [connectionStatus]="webSocketService.status()"
-          [connectionQuality]="webSocketService.quality()"
-          [reconnectAttempts]="webSocketService.reconnectAttemptsCount()"
-          [maxReconnectAttempts]="webSocketService.getMaxReconnectAttempts()"
-        ></app-connection-status>
-        
-        @if (!audioService.microphoneGranted$()) {
-          <div class="info" style="margin-bottom: 24px;">
-            <p style="margin-bottom: 16px;">{{ 'room.micRequired' | translate }}</p>
-            <button (click)="requestMicrophoneAccess()" [disabled]="audioService.requestingAccess$()">
-              {{ (audioService.requestingAccess$() ? 'room.requestingMicAccess' : 'room.requestMicAccess') | translate }}
-            </button>
-          </div>
-        }
-        
-        @if (audioService.microphoneGranted$()) {
-          <h2>{{ 'room.participants' | translate }} ({{ participantCount() }})</h2>
-          
-          <div class="participants-grid">
-            <app-participant
-              [name]="displayName()"
-              [muted]="audioService.isMuted$()"
-              [isSelf]="true"
-            ></app-participant>
-            
-            @for (p of participants(); track p.id) {
-              <app-participant
-                [name]="p.name"
-                [muted]="p.muted"
-                [isSelf]="false"
-              ></app-participant>
-            }
-            
-            @if (participants().length === 0) {
-              <div class="participants-empty">
-                {{ 'room.noParticipants' | translate }}
-              </div>
-            }
-          </div>
-          
-          <app-room-controls
-            [isMuted]="audioService.isMuted$()"
-            [volume]="audioService.volume$()"
-            [micLevel]="audioService.micLevel$()"
-            (toggleMute)="onToggleMute()"
-            (volumeChange)="onVolumeChange($event)"
-            (micLevelChange)="onMicLevelChange($event)"
-            (leaveRoom)="leaveRoom()"
-          ></app-room-controls>
-        }
-      </div>
-    </div>
-  `
+  templateUrl: './room.component.html',
 })
 export class RoomComponent implements OnInit, OnDestroy {
-  private router = inject(Router);
-  private translateService = inject(TranslateService);
-  private clientIdService = inject(ClientIdService);
-  protected webSocketService = inject(WebSocketService);
-  protected audioService = inject(AudioService);
-  private peerConnectionService = inject(PeerConnectionService);
-  private roomStateService = inject(RoomStateService);
+  private readonly router = inject(Router);
+  private readonly translate = inject(TranslateService);
+  private readonly clientIdService = inject(ClientIdService);
+  private readonly peerOrchestrator = inject(PeerOrchestratorService);
+  private readonly signalingHandler = inject(SignalingHandlerService);
 
-  private clientId: string = '';
+  protected readonly ws = inject(WebSocketService);
+  protected readonly audio = inject(AudioService);
+  protected readonly healthMonitor = inject(HealthMonitorService);
+  protected readonly peerConnection = inject(PeerConnectionService);
+  protected readonly roomState = inject(RoomStateService);
+
+  private clientId = '';
   private joinHandled = false;
   private joinSent = false;
   private isProcessingJoin = false;
-  private pendingPeers = new Map<string, { id: string; name: string; muted: boolean; shouldOffer: boolean }>();
-  private processingPeers = new Set<string>();
-  private participantLeftToastTimeout: ReturnType<typeof setTimeout> | null = null;
+  private toastTimeout: ReturnType<typeof setTimeout> | null = null;
 
-  protected healthMonitor = inject(HealthMonitorService);
-  protected participantLeftToast = signal<string | null>(null);
-  private userGestureHandler = () => {
-    void this.audioService.resumeAudioContext();
-    void this.peerConnectionService.resumeRemoteAudio();
-  };
-  private messageSubscription = toSignal(
-    this.webSocketService.messages$.pipe(
-      filter((msg: WebSocketMessage) => !!msg)
-    ),
+  protected readonly participantLeftToast = signal<string | null>(null);
+  protected readonly participants = this.peerConnection.participants$;
+  protected readonly displayName = computed(() => this.roomState.getDisplayName());
+  protected readonly errorMessage = computed(() => {
+    const key = this.audio.errorMessage$() || this.roomState.getErrorMessage();
+    return key ? this.translate.instant(key) : '';
+  });
+  protected readonly participantCount = computed(() => this.participants().length + 1);
+
+  private readonly messageSubscription = toSignal(
+    this.ws.messages$.pipe(filter((m): m is SignalingMessage => !!m)),
     { initialValue: null }
   );
 
-  protected participants = this.peerConnectionService.participants$;
-  protected displayName = computed(() => this.roomStateService.getDisplayName());
-  protected errorMessage = computed(() => {
-    const audioError = this.audioService.errorMessage$();
-    const roomError = this.roomStateService.getErrorMessage();
-    const errorKey = audioError || roomError;
-    return errorKey ? this.translateService.instant(errorKey) : '';
-  });
-  protected participantCount = computed(() => this.participants().length + 1);
-
-  private messageEffect = effect(() => {
-    const message = this.messageSubscription();
-    if (message) {
-      void this.handleSignalingMessage(message);
-    }
+  private readonly messageEffect = effect(() => {
+    const msg = this.messageSubscription();
+    if (msg) void this.onSignalingMessage(msg);
   });
 
-  private connectionEffect = effect(() => {
-    if (!this.webSocketService.isConnected()) {
+  private readonly connectionEffect = effect(() => {
+    if (!this.ws.isConnected()) {
       this.joinHandled = false;
       this.joinSent = false;
       this.isProcessingJoin = false;
     }
   });
 
-  private microphoneEffect = effect(() => {
-    const granted = this.audioService.microphoneGranted$();
-    if (granted && !this.isProcessingJoin) {
-      const localStream = this.audioService.getLocalStream();
-      if (localStream && this.webSocketService.isConnected()) {
-        if (this.joinSent) {
-          this.processPendingPeers();
-          this.healthMonitor.startMonitoring();
-          return;
-        }
-        this.isProcessingJoin = true;
-        const passphrase = this.roomStateService.getPassphrase();
-        if (passphrase && this.roomStateService.getAwaitingChallenge()) {
-          this.sendJoinResponse().catch(() => {
-            this.isProcessingJoin = false;
-          });
-        } else {
-          this.sendJoinMessage();
-        }
-        this.webSocketService.startHeartbeat();
-        this.webSocketService.setupActivityTracking();
-        this.healthMonitor.startMonitoring();
-      }
+  private readonly microphoneEffect = effect(() => {
+    const granted = this.audio.microphoneGranted$();
+    if (!granted || this.isProcessingJoin) return;
+
+    const stream = this.audio.getLocalStream();
+    if (!stream || !this.ws.isConnected()) return;
+
+    if (this.joinSent) {
+      this.peerOrchestrator.processPendingPeers();
+      this.healthMonitor.startMonitoring();
+      return;
     }
+
+    this.isProcessingJoin = true;
+    const passphrase = this.roomState.getPassphrase();
+    const awaitingChallenge = this.roomState.getAwaitingChallenge();
+
+    if (passphrase && awaitingChallenge) {
+      this.signalingHandler
+        .sendJoinResponse(
+          this.displayName(),
+          this.audio.isMuted$(),
+          passphrase,
+          this.roomState.getPendingChallenge()!
+        )
+        .then(() => {})
+        .catch(() => {
+          this.isProcessingJoin = false;
+        });
+    } else {
+      this.signalingHandler.sendJoin(
+        this.displayName(),
+        this.audio.isMuted$()
+      );
+    }
+
+    this.joinSent = true;
+    this.ws.startHeartbeat();
+    this.ws.setupActivityTracking();
+    this.healthMonitor.startMonitoring();
   });
 
   constructor() {
     this.clientId = this.clientIdService.getClientId();
   }
 
-  ngOnInit() {
-    const state = history.state;
-    this.roomStateService.initialize(
-      state?.displayName,
-      state?.passphrase || ''
-    );
+  ngOnInit(): void {
+    const state = history.state as { displayName?: string; passphrase?: string };
+    this.roomState.initialize(state?.displayName ?? '', state?.passphrase ?? '');
 
-    this.peerConnectionService.cleanup();
-    this.webSocketService.connect(this.clientId);
-    void this.autoRequestMicrophoneAccessIfGranted();
+    this.peerConnection.cleanup();
+    this.peerOrchestrator.reset();
+    this.ws.connect(this.clientId);
+
+    void this.autoRequestMicIfGranted();
     document.addEventListener('click', this.userGestureHandler, { passive: true });
-    this.startLocalTrackMonitoring();
+    this.setupLocalTrackMonitoring();
   }
 
-  private startLocalTrackMonitoring(): void {
-    const track = this.audioService.getLocalAudioTrack();
-    if (!track) return;
-    track.onended = () => {
-      this.audioService.cleanup();
-      this.roomStateService.setErrorMessage('room.micTrackEnded');
-    };
-  }
-
-  ngOnDestroy() {
+  ngOnDestroy(): void {
     this.cleanup();
     document.removeEventListener('click', this.userGestureHandler);
   }
 
-  async requestMicrophoneAccess() {
-    await this.audioService.requestMicrophoneAccess();
+  protected requestMicrophoneAccess(): void {
+    void this.audio.requestMicrophoneAccess();
   }
 
-  onToggleMute() {
-    this.audioService.toggleMute();
-
-    if (this.webSocketService.isConnected() && this.roomStateService.getSelfId()) {
-      this.webSocketService.sendMessage({
-        type: 'mute',
-        muted: this.audioService.isMuted$()
-      });
+  protected onToggleMute(): void {
+    this.audio.toggleMute();
+    if (this.ws.isConnected() && this.roomState.getSelfId()) {
+      this.ws.sendMessage({ type: 'mute', muted: this.audio.isMuted$() });
     }
   }
 
-  onVolumeChange(volume: number) {
-    this.audioService.setVolume(volume);
-    this.peerConnectionService.updateVolume(volume);
+  protected onVolumeChange(volume: number): void {
+    this.audio.setVolume(volume);
+    this.peerConnection.updateVolume(volume);
   }
 
-  onMicLevelChange(level: number) {
-    this.audioService.setMicLevel(level);
+  protected onMicLevelChange(level: number): void {
+    this.audio.setMicLevel(level);
   }
 
-  async leaveRoom() {
-    this.roomStateService.setIsLeaving(true);
-
-    const localAudioTrack = this.audioService.getLocalAudioTrack();
-    if (localAudioTrack) {
+  protected async leaveRoom(): Promise<void> {
+    this.roomState.setIsLeaving(true);
+    const track = this.audio.getLocalAudioTrack();
+    if (track?.readyState !== 'ended') {
       try {
-        if (localAudioTrack.readyState !== 'ended') {
-          localAudioTrack.stop();
-        }
-      } catch (error) {
+        track?.stop();
+      } catch {
       }
     }
-
-    await this.sendLeaveMessageAndWait();
+    await this.sendLeaveAndWait();
     this.cleanup();
     this.router.navigate(['/']);
   }
 
-  private async handleSignalingMessage(message: any) {
-    switch (message.type) {
-      case 'joined':
-        if (this.joinHandled && this.roomStateService.getSelfId() === message.selfId) {
-          break;
-        }
-        this.joinHandled = true;
-        this.joinSent = true;
-        this.isProcessingJoin = false;
-        this.roomStateService.setSelfId(message.selfId);
-        if (this.audioService.microphoneGranted$()) {
-          this.webSocketService.startHeartbeat();
-          this.webSocketService.setupActivityTracking();
-        }
-        for (const p of message.participants || []) {
-          if (p.id !== message.selfId) {
-            const exists = this.peerConnectionService
-              .getParticipants()
-              .some((participant: Participant) => participant.id === p.id);
-            if (!exists && !this.processingPeers.has(p.id)) {
-              const selfId = this.roomStateService.getSelfId();
-              const shouldOffer = selfId < p.id;
-              this.createPeerConnection(p.id, p.name, p.muted || false, shouldOffer);
-            }
-          }
-        }
-        this.processPendingPeers();
-        break;
+  private async onSignalingMessage(message: SignalingMessage): Promise<void> {
+    const deps = {
+      onCreatePeer: (id: string, name: string, muted: boolean, shouldOffer: boolean) =>
+        this.peerOrchestrator.createPeer(id, name, muted, shouldOffer),
+      onCleanup: () => this.cleanup(),
+    };
 
-      case 'join-error':
-        const errorMsg = message.message || this.translateService.instant('room.failedToJoin');
-        this.roomStateService.setErrorMessage(errorMsg);
-        this.cleanup();
-        setTimeout(() => {
-          this.router.navigate(['/'], { state: { message: errorMsg } });
-        }, 2000);
-        break;
-
-      case 'participant-joined':
-        if (message.id !== this.roomStateService.getSelfId()) {
-          const exists = this.peerConnectionService
-            .getParticipants()
-            .some((participant: Participant) => participant.id === message.id);
-          if (!exists && !this.processingPeers.has(message.id)) {
-            const selfId = this.roomStateService.getSelfId();
-            const shouldOffer = selfId < message.id;
-            this.createPeerConnection(message.id, message.name, message.muted || false, shouldOffer);
-          }
-        }
-        break;
-
-      case 'participant-left':
-        const leftParticipant = this.peerConnectionService.getParticipants().find(p => p.id === message.id);
-        const leftName = leftParticipant?.name ?? 'Guest';
-        this.peerConnectionService.removeParticipant(message.id);
-        const reasonKey = message.reason === 'reconnected' ? 'room.participantLeftReconnected' : message.reason === 'disconnect' ? 'room.participantLeftDisconnected' : 'room.participantLeft';
-        const toastMsg = this.translateService.instant(reasonKey, { name: leftName });
-        this.participantLeftToast.set(toastMsg);
-        if (this.participantLeftToastTimeout) clearTimeout(this.participantLeftToastTimeout);
-        this.participantLeftToastTimeout = setTimeout(() => {
-          this.participantLeftToast.set(null);
-          this.participantLeftToastTimeout = null;
-        }, 4000);
-        break;
-
-      case 'participant-mute':
-        this.peerConnectionService.updateParticipantMute(message.id, message.muted);
-        break;
-
-      case 'offer':
-        if (message.fromId && message.fromId !== this.roomStateService.getSelfId()) {
-          const existing = this.peerConnectionService
-            .getParticipants()
-            .some((p: Participant) => p.id === message.fromId);
-
-          if (!existing && !this.processingPeers.has(message.fromId)) {
-            await this.createPeerConnection(
-              message.fromId,
-              message.name || 'Guest',
-              message.muted || false,
-              false
-            );
-            
-            await new Promise(resolve => setTimeout(resolve, 200));
-          }
-
-          const participant = this.peerConnectionService
-            .getParticipants()
-            .find((p: Participant) => p.id === message.fromId);
-          
-          if (!participant || !participant.peerConnection) {
-            setTimeout(() => {
-              const retryParticipant = this.peerConnectionService
-                .getParticipants()
-                .find((p: Participant) => p.id === message.fromId);
-              if (retryParticipant && retryParticipant.peerConnection) {
-                const pc = retryParticipant.peerConnection;
-                const connState = pc.connectionState as string;
-                if (connState !== 'failed' && connState !== 'closed') {
-                  this.peerConnectionService.handleOffer(
-                    message.fromId,
-                    message.sdp,
-                    (msg: { type: string; [key: string]: unknown }) => this.webSocketService.sendMessage(msg)
-                  ).catch(() => {});
-                }
-              }
-            }, 300);
-            break;
-          }
-
-          const pc = participant.peerConnection;
-          if (pc.signalingState === 'closed' || pc.connectionState === 'closed') {
-            break;
-          }
-
-          await this.peerConnectionService.handleOffer(
-            message.fromId,
-            message.sdp,
-            (msg: { type: string; [key: string]: unknown }) => this.webSocketService.sendMessage(msg)
-          );
-        }
-        break;
-
-      case 'answer':
-        if (message.fromId && message.fromId !== this.roomStateService.getSelfId()) {
-          const participant = this.peerConnectionService
-            .getParticipants()
-            .find((p: Participant) => p.id === message.fromId);
-          
-          if (participant && participant.peerConnection) {
-            const pc = participant.peerConnection;
-            const connState = pc.connectionState as string;
-            if (connState !== 'failed' && connState !== 'closed') {
-              await this.peerConnectionService.handleAnswer(message.fromId, message.sdp);
-            }
-          }
-        }
-        break;
-
-      case 'ice':
-        if (message.fromId && message.fromId !== this.roomStateService.getSelfId()) {
-          const participant = this.peerConnectionService
-            .getParticipants()
-            .find((p: Participant) => p.id === message.fromId);
-          
-          if (participant && participant.peerConnection) {
-            const pc = participant.peerConnection;
-            const connState = pc.connectionState as string;
-            if (connState !== 'failed' && connState !== 'closed') {
-              await this.peerConnectionService.handleIce(message.fromId, message.candidate);
-            }
-          }
-        }
-        break;
-
-      case 'kicked':
-        let kickMessage = this.translateService.instant('room.disconnectedInactivity');
-        if (message.reason === 'room_reset') {
-          kickMessage = this.translateService.instant('room.disconnectedReset');
-        }
-        this.roomStateService.setErrorMessage(kickMessage);
-        this.cleanup();
-        setTimeout(() => {
-          this.router.navigate(['/'], { state: { message: kickMessage } });
-        }, 1000);
-        break;
-
-      case 'challenge':
-        this.roomStateService.setPendingChallenge(message.challenge);
-        this.roomStateService.setAwaitingChallenge(true);
-        break;
-    }
-  }
-
-  private async createPeerConnection(
-    remoteId: string,
-    remoteName: string,
-    muted: boolean,
-    shouldOffer: boolean
-  ) {
-    if (this.processingPeers.has(remoteId)) {
-      this.pendingPeers.set(remoteId, { id: remoteId, name: remoteName, muted, shouldOffer });
+    if (message.type === 'joined' && this.joinHandled && this.roomState.getSelfId() === message['selfId']) {
       return;
     }
-
-    const localStream = this.audioService.getLocalStream();
-    if (!localStream) {
-      this.pendingPeers.set(remoteId, { id: remoteId, name: remoteName, muted, shouldOffer });
-      return;
-    }
-
-    const audioTrack = this.audioService.getLocalAudioTrack();
-    if (!audioTrack || audioTrack.readyState !== 'live') {
-      this.pendingPeers.set(remoteId, { id: remoteId, name: remoteName, muted, shouldOffer });
-      return;
-    }
-
-    this.processingPeers.add(remoteId);
-    try {
-      await this.peerConnectionService.createPeerConnection(
-        remoteId,
-        remoteName,
-        muted,
-        shouldOffer,
-        localStream,
-        this.audioService.volume$(),
-        (msg: { type: string; [key: string]: unknown }) => this.webSocketService.sendMessage(msg)
-      );
-
-      const created = this.peerConnectionService
-        .getParticipants()
-        .some((participant: Participant) => participant.id === remoteId);
-      if (created) {
-        this.pendingPeers.delete(remoteId);
-      } else if (!this.pendingPeers.has(remoteId)) {
-        this.pendingPeers.set(remoteId, { id: remoteId, name: remoteName, muted, shouldOffer });
-      }
-    } catch (error) {
-      console.error(`Error creating peer connection for ${remoteId}:`, error);
-      this.pendingPeers.set(remoteId, { id: remoteId, name: remoteName, muted, shouldOffer });
-    } finally {
-      this.processingPeers.delete(remoteId);
-    }
-  }
-
-  private sendJoinMessage() {
-    if (this.joinSent) {
-      return;
-    }
-    this.joinSent = true;
-    this.webSocketService.sendMessage({
-      type: 'join',
-      name: this.displayName(),
-      muted: this.audioService.isMuted$()
-    });
-  }
-
-  private async sendJoinResponse() {
-    const passphrase = this.roomStateService.getPassphrase();
-    const pendingChallenge = this.roomStateService.getPendingChallenge();
-    if (!passphrase || !pendingChallenge) {
-      this.isProcessingJoin = false;
-      return;
-    }
-
-    if (this.joinSent) {
-      this.isProcessingJoin = false;
-      return;
-    }
-
-    try {
+    if (message.type === 'joined') {
+      this.joinHandled = true;
       this.joinSent = true;
-      const passphraseHash = await this.roomStateService.sha256(passphrase);
-      const response = await this.roomStateService.sha256(passphraseHash + pendingChallenge);
-
-      this.webSocketService.sendMessage({
-        type: 'join-response',
-        name: this.displayName(),
-        muted: this.audioService.isMuted$(),
-        response: response
-      });
-    } catch (error) {
       this.isProcessingJoin = false;
-      this.joinSent = false;
+    }
+
+    const outcome = await this.signalingHandler.handleMessage(message, deps);
+
+    if (message.type === 'joined') {
+      this.peerOrchestrator.processPendingPeers();
+    }
+
+    switch (outcome.action) {
+      case 'navigate':
+        setTimeout(
+          () => this.router.navigate([outcome.path], { state: outcome.state as Record<string, unknown> }),
+          outcome.delayMs ?? 1000
+        );
+        break;
+      case 'toast':
+        this.participantLeftToast.set(outcome.message);
+        if (this.toastTimeout) clearTimeout(this.toastTimeout);
+        this.toastTimeout = setTimeout(() => {
+          this.participantLeftToast.set(null);
+          this.toastTimeout = null;
+        }, outcome.duration);
+        break;
+      default:
+        break;
     }
   }
 
-  private async sendLeaveMessageAndWait(): Promise<void> {
-    if (this.webSocketService.isConnected() && this.roomStateService.getSelfId()) {
+  private readonly userGestureHandler = (): void => {
+    void this.audio.resumeAudioContext();
+    void this.peerConnection.resumeRemoteAudio();
+  };
+
+  private setupLocalTrackMonitoring(): void {
+    const track = this.audio.getLocalAudioTrack();
+    if (!track) return;
+    track.onended = () => {
+      this.audio.cleanup();
+      this.roomState.setErrorMessage('room.micTrackEnded');
+    };
+  }
+
+  private async sendLeaveAndWait(): Promise<void> {
+    if (this.ws.isConnected() && this.roomState.getSelfId()) {
       try {
-        this.webSocketService.sendMessage({ type: 'leave' });
-        await new Promise(resolve => setTimeout(resolve, 100));
-      } catch (error) {
+        this.ws.sendMessage({ type: 'leave' });
+        await new Promise(r => setTimeout(r, 100));
+      } catch {
       }
     }
   }
 
-  private cleanup() {
-    if (this.participantLeftToastTimeout) {
-      clearTimeout(this.participantLeftToastTimeout);
-      this.participantLeftToastTimeout = null;
+  private cleanup(): void {
+    if (this.toastTimeout) {
+      clearTimeout(this.toastTimeout);
+      this.toastTimeout = null;
     }
     this.participantLeftToast.set(null);
     this.healthMonitor.stopMonitoring();
     this.isProcessingJoin = false;
     this.joinHandled = false;
     this.joinSent = false;
-    this.processingPeers.clear();
-    this.pendingPeers.clear();
-    this.webSocketService.disconnect();
-    this.peerConnectionService.cleanup();
-    this.audioService.cleanup();
+    this.peerOrchestrator.reset();
+    this.ws.disconnect();
+    this.peerConnection.cleanup();
+    this.audio.cleanup();
   }
 
-  private processPendingPeers(): void {
-    if (this.pendingPeers.size === 0 || !this.audioService.microphoneGranted$() || !this.webSocketService.isConnected()) {
-      return;
-    }
-
-    const pending = Array.from(this.pendingPeers.values());
-    for (const peer of pending) {
-      if (!this.processingPeers.has(peer.id)) {
-        this.createPeerConnection(peer.id, peer.name, peer.muted, peer.shouldOffer);
-      }
-    }
-  }
-
-  private async autoRequestMicrophoneAccessIfGranted(): Promise<void> {
-    if (!('permissions' in navigator)) {
-      return;
-    }
-
+  private async autoRequestMicIfGranted(): Promise<void> {
+    if (!('permissions' in navigator)) return;
     try {
       const status = await navigator.permissions.query({ name: 'microphone' as PermissionName });
       if (status.state === 'granted') {
-        await this.audioService.requestMicrophoneAccess();
+        await this.audio.requestMicrophoneAccess();
       }
-    } catch (error) {
+    } catch {
     }
   }
 }

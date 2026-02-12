@@ -13,6 +13,7 @@ public class SignalingService
     private readonly ChallengeService _challengeService;
     private readonly CryptographyService _cryptographyService;
     private readonly WebSocketMessageService _messageService;
+    private readonly BroadcastService _broadcastService;
     private readonly RoomOptions _roomOptions;
     private readonly string? _roomPassphraseHash;
 
@@ -22,6 +23,7 @@ public class SignalingService
         ChallengeService challengeService,
         CryptographyService cryptographyService,
         WebSocketMessageService messageService,
+        BroadcastService broadcastService,
         IOptions<RoomOptions> roomOptions)
     {
         _roomService = roomService;
@@ -29,6 +31,7 @@ public class SignalingService
         _challengeService = challengeService;
         _cryptographyService = cryptographyService;
         _messageService = messageService;
+        _broadcastService = broadcastService;
         _roomOptions = roomOptions.Value;
         
         if (!string.IsNullOrEmpty(_roomOptions.Passphrase))
@@ -327,91 +330,33 @@ public class SignalingService
 
     private void BroadcastParticipantJoined(string connectionId, string name, bool muted)
     {
-        var message = new
+        _broadcastService.BroadcastToParticipants(connectionId, new
         {
             type = "participant-joined",
             id = connectionId,
-            name = name,
-            muted = muted
-        };
-
-        var connections = _connectionService.GetAllConnectionsExcept(connectionId);
-        foreach (var kvp in connections)
-        {
-            if (_roomService.HasParticipant(kvp.Key))
-            {
-                _ = Task.Run(async () =>
-                {
-                    await _messageService.SendMessageAsync(kvp.Value, message);
-                });
-            }
-        }
+            name,
+            muted
+        });
     }
 
     public void BroadcastParticipantLeft(string connectionId, string name, string reason)
     {
-        var message = new
+        _broadcastService.BroadcastToParticipants(connectionId, new
         {
             type = "participant-left",
             id = connectionId,
-            reason = reason
-        };
-
-        var connections = _connectionService.GetAllConnectionsExcept(connectionId);
-        var broadcastCount = 0;
-        foreach (var kvp in connections)
-        {
-            if (_roomService.HasParticipant(kvp.Key))
-            {
-                broadcastCount++;
-                _ = Task.Run(async () =>
-                {
-                    try
-                    {
-                        await _messageService.SendMessageAsync(kvp.Value, message);
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"Error broadcasting participant-left to {kvp.Key}: {ex.Message}");
-                    }
-                });
-            }
-        }
-        Console.WriteLine($"Broadcasted participant-left for {name} (ID: {connectionId}, reason: {reason}) to {broadcastCount} participant(s)");
+            reason
+        });
+        Console.WriteLine($"Broadcasted participant-left for {name} (ID: {connectionId}, reason: {reason})");
     }
 
     private void BroadcastMuteState(string connectionId, bool muted)
     {
-        var participant = _roomService.GetParticipant(connectionId);
-        var participantName = participant?.Name ?? "Unknown";
-        
-        var message = new
+        _broadcastService.BroadcastToParticipants(connectionId, new
         {
             type = "participant-mute",
             id = connectionId,
-            muted = muted
-        };
-
-        var connections = _connectionService.GetAllConnectionsExcept(connectionId);
-        var broadcastCount = 0;
-        foreach (var kvp in connections)
-        {
-            if (_roomService.HasParticipant(kvp.Key))
-            {
-                broadcastCount++;
-                _ = Task.Run(async () =>
-                {
-                    try
-                    {
-                        await _messageService.SendMessageAsync(kvp.Value, message);
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"Error broadcasting participant-mute to {kvp.Key}: {ex.Message}");
-                    }
-                });
-            }
-        }
-        Console.WriteLine($"Broadcasted participant-mute for {participantName} (ID: {connectionId}, muted: {muted}) to {broadcastCount} participant(s)");
+            muted
+        });
     }
 }
