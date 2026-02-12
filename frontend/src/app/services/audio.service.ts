@@ -42,7 +42,17 @@ export class AudioService {
     this.errorMessage.set('');
 
     try {
-      this.localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      try {
+        this.localStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          }
+        });
+      } catch {
+        this.localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      }
       const tracks = this.localStream.getAudioTracks();
       if (tracks.length === 0) {
         throw new Error('No audio tracks available');

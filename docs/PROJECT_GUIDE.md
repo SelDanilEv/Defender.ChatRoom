@@ -409,7 +409,7 @@ All messages are JSON with `type` field.
 | Add new WebSocket message type | Backend: SignalingService.ProcessMessageAsync; Frontend: SignalingHandlerService.handleMessage |
 | Change passphrase logic | Backend: SignalingService (HandleJoinResponseAsync, SendChallengeAsync), ChallengeService, CryptographyService; Frontend: RoomStateService.sha256, RoomComponent.sendJoinResponse |
 | Change inactivity/timeout | Backend: RoomOptions, WebSocketHandlerService (ping loop); Frontend: WebSocketService (heartbeat, connection monitoring) |
-| Change STUN/TURN | Frontend: peer-connection.service.ts (iceServers) |
+| Change STUN/TURN | Frontend: peer-connection.service.ts — `DEFAULT_ICE_SERVERS`, `getIceServers()`. Add TURN via `window.__TURN_CONFIG__` before bootstrap (e.g. in index.html). |
 | Add translation key | Frontend: translation-loader.service.ts (translations object); use `{{ 'key' \| translate }}` |
 | Add new route | Frontend: app.routes.ts |
 | Change nginx proxy | Frontend: nginx.conf |
@@ -427,6 +427,7 @@ All messages are JSON with `type` field.
 - **HTTP on localhost**: getUserMedia works over HTTP on localhost; HTTPS needed for non-localhost.
 - **ClientId reuse**: Same clientId reconnecting replaces existing connection (reconnect-from-another-tab flow).
 - **Offerer by ID**: Deterministic offerer selection avoids duplicate offers.
+- **TURN for restrictive networks**: Default is dual STUN. For corporate/symmetric NAT, set `window.__TURN_CONFIG__ = [{ urls: 'turn:host:port', username: '...', credential: '...' }]` before app loads.
 
 ---
 

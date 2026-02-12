@@ -8,7 +8,19 @@ export interface Participant {
   peerConnection?: RTCPeerConnection;
 }
 
-const STUN = [{ urls: 'stun:stun.l.google.com:19302' }];
+const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' }
+];
+
+function getIceServers(): RTCIceServer[] {
+  const custom = (window as unknown as { __TURN_CONFIG__?: RTCIceServer[] }).__TURN_CONFIG__;
+  if (custom?.length) {
+    return [...DEFAULT_ICE_SERVERS, ...custom];
+  }
+  return DEFAULT_ICE_SERVERS;
+}
+
 const MAX_RETRIES = 2;
 
 @Injectable({
@@ -52,7 +64,7 @@ export class PeerConnectionService {
         return;
       }
 
-      const pc = new RTCPeerConnection({ iceServers: STUN });
+      const pc = new RTCPeerConnection({ iceServers: getIceServers(), bundlePolicy: 'max-bundle' });
 
       pc.addTransceiver('audio', { direction: 'recvonly' });
 
@@ -122,7 +134,7 @@ export class PeerConnectionService {
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
         sendMessage({ type: 'offer', toId: remoteId, sdp: JSON.stringify(offer) });
-        this.drainIceQueue(remoteId);
+        await this.drainIceQueue(remoteId);
       }
     } finally {
       this.pendingCreates.delete(remoteId);
@@ -163,7 +175,7 @@ export class PeerConnectionService {
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
       sendMessage({ type: 'answer', toId: fromId, sdp: JSON.stringify(answer) });
-      this.drainIceQueue(fromId);
+      await this.drainIceQueue(fromId);
     } catch (err) {
       this.pendingOffers.set(fromId, sdp);
       setTimeout(() => {
@@ -252,7 +264,7 @@ export class PeerConnectionService {
     }
   }
 
-  private drainIceQueue(remoteId: string): void {
+  private async drainIceQueue(remoteId: string): Promise<void> {
     const participant = this.participants().find(p => p.id === remoteId);
     if (!participant?.peerConnection) return;
 
@@ -261,13 +273,13 @@ export class PeerConnectionService {
     this.iceQueues.delete(remoteId);
 
     const pc = participant.peerConnection!;
-    queue.forEach(async (c) => {
+    for (const c of queue) {
       try {
         const parsed = JSON.parse(c) as RTCIceCandidateInit;
         await pc.addIceCandidate(parsed);
       } catch {
       }
-    });
+    }
   }
 
   updateParticipantMute(id: string, muted: boolean): void {
