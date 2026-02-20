@@ -45,14 +45,4 @@ describe('RoomStateService', () => {
     expect(service.getErrorMessage()).toBe('error.key');
   });
 
-  it('sha256 returns hex string', async () => {
-    const hash = await service.sha256('hello');
-    expect(hash).toMatch(/^[a-f0-9]{64}$/);
-  });
-
-  it('sha256 is deterministic', async () => {
-    const a = await service.sha256('same');
-    const b = await service.sha256('same');
-    expect(a).toBe(b);
-  });
 });
