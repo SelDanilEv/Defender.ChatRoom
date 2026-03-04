@@ -14,10 +14,7 @@ export interface WebSocketMessage {
 })
 export class WebSocketService {
   private ws?: WebSocket;
-  private reconnectTimeout?: number;
   private heartbeatInterval?: number;
-  private connectionCheckInterval?: number;
-  private lastHeartbeatTime = 0;
   private messageQueue: WebSocketMessage[] = [];
   private readonly maxQueueSize = 100;
   private isConnecting = false;
@@ -27,7 +24,7 @@ export class WebSocketService {
   private readonly connectionStatus = signal<ConnectionStatus>('disconnected');
   private readonly connectionQuality = signal<ConnectionQuality>('good');
   private readonly reconnectAttempts = signal(0);
-  private readonly maxReconnectAttempts = 10;
+  private readonly maxReconnectAttempts = 0;
 
   private readonly messageSubject = new Subject<WebSocketMessage>();
 
@@ -66,22 +63,18 @@ export class WebSocketService {
     } catch (error) {
       this.isConnecting = false;
       this.connectionStatus.set('disconnected');
-      this.attemptReconnect(clientId);
       return;
     }
 
     this.ws.onopen = () => {
       this.isConnecting = false;
       this.connectionStatus.set('connected');
+      this.connectionQuality.set('good');
       this.reconnectAttempts.set(0);
-      this.lastHeartbeatTime = Date.now();
-      this.startConnectionMonitoring();
       this.flushMessageQueue();
     };
 
     this.ws.onmessage = (event) => {
-      this.lastHeartbeatTime = Date.now();
-
       if (event.data === 'ping') {
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
           this.ws.send('pong');
@@ -101,15 +94,9 @@ export class WebSocketService {
       this.connectionQuality.set('poor');
     };
 
-    this.ws.onclose = (event) => {
+    this.ws.onclose = () => {
       this.isConnecting = false;
-      if (event.code === 1000 || event.code === 1001) {
-        this.connectionStatus.set('disconnected');
-        return;
-      }
-
       this.connectionStatus.set('disconnected');
-      this.attemptReconnect(clientId);
     };
   }
 
@@ -168,16 +155,6 @@ export class WebSocketService {
       this.heartbeatInterval = undefined;
     }
 
-    if (this.reconnectTimeout) {
-      clearTimeout(this.reconnectTimeout);
-      this.reconnectTimeout = undefined;
-    }
-
-    if (this.connectionCheckInterval) {
-      clearInterval(this.connectionCheckInterval);
-      this.connectionCheckInterval = undefined;
-    }
-
     this.activityEvents.forEach(event => {
       document.removeEventListener(event, this.activityHandler);
     });
@@ -201,51 +178,8 @@ export class WebSocketService {
 
     this.messageQueue = [];
     this.connectionStatus.set('disconnected');
-  }
-
-  private attemptReconnect(clientId: string): void {
-    if (this.reconnectTimeout) {
-      return;
-    }
-
-    if (this.reconnectAttempts() >= this.maxReconnectAttempts) {
-      this.connectionStatus.set('disconnected');
-      return;
-    }
-
-    this.reconnectAttempts.update(attempts => attempts + 1);
-    const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts() - 1), 30000);
-
-    this.reconnectTimeout = window.setTimeout(() => {
-      this.reconnectTimeout = undefined;
-      this.connect(clientId);
-    }, delay);
-  }
-
-  private startConnectionMonitoring(): void {
-    if (this.connectionCheckInterval) {
-      clearInterval(this.connectionCheckInterval);
-    }
-
-    this.connectionCheckInterval = window.setInterval(() => {
-      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-        return;
-      }
-
-      const timeSinceLastHeartbeat = Date.now() - this.lastHeartbeatTime;
-
-      if (timeSinceLastHeartbeat > 90000) {
-        this.connectionQuality.set('unstable');
-        try {
-          this.ws.close(1006, 'Connection timeout');
-        } catch (error) {
-        }
-      } else if (timeSinceLastHeartbeat > 60000) {
-        this.connectionQuality.set('poor');
-      } else {
-        this.connectionQuality.set('good');
-      }
-    }, 10000);
+    this.connectionQuality.set('good');
+    this.reconnectAttempts.set(0);
   }
 
   private flushMessageQueue(): void {

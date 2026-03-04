@@ -9,14 +9,6 @@
     @if (participantLeftToast()) {
       <div class="info" style="margin-bottom: 16px;">{{ participantLeftToast() }}</div>
     }
-    @if (healthMonitor.status().overall !== 'healthy' && audio.microphoneGranted$()) {
-      <div class="info" style="margin-bottom: 16px;">
-        {{ 'room.healthIssues' | translate }}
-        <button type="button" (click)="healthMonitor.forceRecovery()">
-          {{ 'room.retryConnection' | translate }}
-        </button>
-      </div>
-    }
     <app-connection-status
       [connectionStatus]="ws.status()"
       [connectionQuality]="ws.quality()"

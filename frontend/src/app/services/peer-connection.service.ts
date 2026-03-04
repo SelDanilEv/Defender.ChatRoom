@@ -21,8 +21,6 @@ function getIceServers(): RTCIceServer[] {
   return DEFAULT_ICE_SERVERS;
 }
 
-const MAX_RETRIES = 2;
-
 @Injectable({
   providedIn: 'root'
 })
@@ -34,7 +32,6 @@ export class PeerConnectionService {
   private readonly processingOffers = new Set<string>();
   private readonly processingAnswers = new Set<string>();
   private readonly iceQueues = new Map<string, string[]>();
-  private readonly lastRetryAt = new Map<string, number>();
 
   readonly participants$ = this.participants.asReadonly();
 
@@ -45,8 +42,7 @@ export class PeerConnectionService {
     shouldOffer: boolean,
     localStream: MediaStream,
     volume: number,
-    sendMessage: (msg: any) => void,
-    retryCount = 0
+    sendMessage: (msg: any) => void
   ): Promise<void> {
     if (this.pendingCreates.has(remoteId)) return;
 
@@ -65,8 +61,6 @@ export class PeerConnectionService {
       }
 
       const pc = new RTCPeerConnection({ iceServers: getIceServers(), bundlePolicy: 'max-bundle' });
-
-      pc.addTransceiver('audio', { direction: 'recvonly' });
 
       tracks.forEach(track => {
         try {
@@ -113,16 +107,24 @@ export class PeerConnectionService {
         const p = this.participants().find(x => x.id === remoteId);
         if (!p || p.peerConnection !== pc) return;
 
-        if (pc.connectionState === 'failed' && retryCount < MAX_RETRIES) {
-          const now = Date.now();
-          if (now - (this.lastRetryAt.get(remoteId) ?? 0) > 2000) {
-            this.lastRetryAt.set(remoteId, now);
-            this.removeParticipant(remoteId);
-            setTimeout(() => {
-              this.createPeerConnection(remoteId, remoteName, muted, shouldOffer, localStream, volume, sendMessage, retryCount + 1);
-            }, 1000);
-          }
-        } else if (pc.connectionState === 'closed') {
+        if (
+          pc.connectionState === 'failed' ||
+          pc.connectionState === 'disconnected' ||
+          pc.connectionState === 'closed'
+        ) {
+          this.removeParticipant(remoteId);
+        }
+      };
+
+      pc.oniceconnectionstatechange = () => {
+        const p = this.participants().find(x => x.id === remoteId);
+        if (!p || p.peerConnection !== pc) return;
+
+        if (
+          pc.iceConnectionState === 'failed' ||
+          pc.iceConnectionState === 'disconnected' ||
+          pc.iceConnectionState === 'closed'
+        ) {
           this.removeParticipant(remoteId);
         }
       };
@@ -306,7 +308,6 @@ export class PeerConnectionService {
     p.audioElement?.remove();
     this.participants.update(list => list.filter(x => x.id !== id));
     this.iceQueues.delete(id);
-    this.lastRetryAt.delete(id);
   }
 
   cleanup(): void {
@@ -321,7 +322,6 @@ export class PeerConnectionService {
     this.processingOffers.clear();
     this.processingAnswers.clear();
     this.iceQueues.clear();
-    this.lastRetryAt.clear();
   }
 
   async resumeRemoteAudio(): Promise<void> {

@@ -58,6 +58,7 @@ export class RoomComponent implements OnInit, OnDestroy {
   private joinHandled = false;
   private joinSent = false;
   private isProcessingJoin = false;
+  private hasDroppedFromCall = false;
   private toastTimeout: ReturnType<typeof setTimeout> | null = null;
 
   protected readonly participantLeftToast = signal<string | null>(null);
@@ -79,12 +80,11 @@ export class RoomComponent implements OnInit, OnDestroy {
     if (msg) void this.onSignalingMessage(msg);
   });
 
-  private readonly connectionEffect = effect(() => {
-    if (!this.ws.isConnected()) {
-      this.joinHandled = false;
-      this.joinSent = false;
-      this.isProcessingJoin = false;
-    }
+  private readonly localIssueEffect = effect(() => {
+    const issueKey = this.healthMonitor.localIssue();
+    if (!issueKey) return;
+    if (this.roomState.getIsLeaving()) return;
+    void this.dropCurrentUser(issueKey);
   });
 
   private readonly microphoneEffect = effect(() => {
@@ -93,6 +93,7 @@ export class RoomComponent implements OnInit, OnDestroy {
 
     const stream = this.audio.getLocalStream();
     if (!stream || !this.ws.isConnected()) return;
+    this.setupLocalTrackMonitoring();
 
     if (this.joinSent) {
       this.peerOrchestrator.processPendingPeers();
@@ -236,8 +237,8 @@ export class RoomComponent implements OnInit, OnDestroy {
     const track = this.audio.getLocalAudioTrack();
     if (!track) return;
     track.onended = () => {
-      this.audio.cleanup();
-      this.roomState.setErrorMessage('room.micTrackEnded');
+      if (this.roomState.getIsLeaving()) return;
+      void this.dropCurrentUser('room.micTrackEnded');
     };
   }
 
@@ -265,6 +266,18 @@ export class RoomComponent implements OnInit, OnDestroy {
     this.ws.disconnect();
     this.peerConnection.cleanup();
     this.audio.cleanup();
+  }
+
+  private async dropCurrentUser(reasonKey: string): Promise<void> {
+    if (this.hasDroppedFromCall) {
+      return;
+    }
+
+    this.hasDroppedFromCall = true;
+    this.roomState.setIsLeaving(true);
+    await this.sendLeaveAndWait();
+    this.cleanup();
+    this.router.navigate(['/'], { state: { message: this.translate.instant(reasonKey) } });
   }
 
   private async autoRequestMicIfGranted(): Promise<void> {
